@@ -40,13 +40,13 @@ incompressible Navier-Stokes equations", J. Comput. Phys. 59, 308–323.
 
 import numpy as np
 
-from src.grid      import CartesianGrid
-from src.boundary  import BoundaryConfig, apply_velocity_bc, apply_pressure_bc, \
-                           apply_post_correction_bc
+from src.grid import CartesianGrid
+from src.boundary import BoundaryConfig, apply_velocity_bc, apply_pressure_bc, \
+    apply_post_correction_bc
 from src.operators import rhs_u, rhs_v, divergence
-from src.poisson   import PoissonSolver
-from src.rk3       import ssp_rk3_step
-from src.ibm       import ImmersedBoundary
+from src.poisson import PoissonSolver
+from src.rk3 import ssp_rk3_step
+from src.ibm import ImmersedBoundary
 
 
 class FractionalStepSolver:
@@ -67,10 +67,10 @@ class FractionalStepSolver:
     def __init__(self, grid: CartesianGrid, bc: BoundaryConfig,
                  nu: float,
                  ibm: ImmersedBoundary = None):
-        self.grid    = grid
-        self.bc      = bc
-        self.nu      = nu
-        self.ibm     = ibm
+        self.grid = grid
+        self.bc = bc
+        self.nu = nu
+        self.ibm = ibm
         self._poisson = PoissonSolver(grid, bc)
 
         # Field arrays (initialised by caller via init_fields)
@@ -104,8 +104,8 @@ class FractionalStepSolver:
         Modifies ``self.u``, ``self.v``, ``self.p``, ``self.t`` in-place.
         """
         grid = self.grid
-        bc   = self.bc
-        nu   = self.nu
+        bc = self.bc
+        nu = self.nu
 
         # ----------------------------------------------------------------
         # Step 1 — SSP-RK3 for convection-diffusion (no pressure)
@@ -188,5 +188,6 @@ class FractionalStepSolver:
         u_max = max(np.max(np.abs(self.u)), 1e-12)
         v_max = max(np.max(np.abs(self.v)), 1e-12)
         dt_conv = cfl_target * min(grid.dx / u_max, grid.dy / v_max)
-        dt_diff = 0.5 * cfl_target / (self.nu * (1.0 / grid.dx**2 + 1.0 / grid.dy**2))
+        dt_diff = 0.5 * cfl_target / \
+            (self.nu * (1.0 / grid.dx**2 + 1.0 / grid.dy**2))
         return min(dt_conv, dt_diff, dt_max)

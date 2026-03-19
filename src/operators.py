@@ -127,8 +127,8 @@ def laplacian_u(u: np.ndarray, grid: CartesianGrid,
     # x-direction: d²u/dx²
     # Interior in x: i=1..nx-1 → use u[i-1], u[i], u[i+1]
     u_xm = u[:-2, :]   # u[i-1, j]
-    u_xp = u[2:,  :]   # u[i+1, j]
-    u_0  = u[1:-1, :]  # u[i,   j]
+    u_xp = u[2:, :]   # u[i+1, j]
+    u_0 = u[1:-1, :]  # u[i,   j]
     d2u_dx2 = (u_xp - 2.0 * u_0 + u_xm) / dx**2
 
     # y-direction: d²u/dy²
@@ -138,10 +138,10 @@ def laplacian_u(u: np.ndarray, grid: CartesianGrid,
 
     u_ym = np.empty_like(u_0)
     u_yp = np.empty_like(u_0)
-    u_ym[:, 1:]  = u_0[:, :-1]    # u[i, j-1] for j>=1
-    u_ym[:, 0]   = u_ghost_bot    # ghost at j=-1
+    u_ym[:, 1:] = u_0[:, :-1]    # u[i, j-1] for j>=1
+    u_ym[:, 0] = u_ghost_bot    # ghost at j=-1
     u_yp[:, :-1] = u_0[:, 1:]     # u[i, j+1] for j<=ny-2
-    u_yp[:, -1]  = u_ghost_top    # ghost at j=ny
+    u_yp[:, -1] = u_ghost_top    # ghost at j=ny
 
     d2u_dy2 = (u_yp - 2.0 * u_0 + u_ym) / dy**2
 
@@ -160,7 +160,7 @@ def laplacian_v(v: np.ndarray, grid: CartesianGrid,
     # y-direction
     v_ym = v[:, :-2]   # v[i, j-1]
     v_yp = v[:, 2:]    # v[i, j+1]
-    v_0  = v[:, 1:-1]  # v[i, j]
+    v_0 = v[:, 1:-1]  # v[i, j]
     d2v_dy2 = (v_yp - 2.0 * v_0 + v_ym) / dy**2
 
     # x-direction
@@ -169,10 +169,10 @@ def laplacian_v(v: np.ndarray, grid: CartesianGrid,
 
     v_xm = np.empty_like(v_0)
     v_xp = np.empty_like(v_0)
-    v_xm[1:,  :] = v_0[:-1, :]
-    v_xm[0,   :] = v_ghost_lft
+    v_xm[1:, :] = v_0[:-1, :]
+    v_xm[0, :] = v_ghost_lft
     v_xp[:-1, :] = v_0[1:, :]
-    v_xp[-1,  :] = v_ghost_rgt
+    v_xp[-1, :] = v_ghost_rgt
 
     d2v_dx2 = (v_xp - 2.0 * v_0 + v_xm) / dx**2
 
@@ -203,7 +203,7 @@ def convection_u(u: np.ndarray, v: np.ndarray,
     # u at left face (at xc[i-1]):
     #   u_w = (u[i-1, j] + u[i, j]) / 2
     u_e = 0.5 * (u[1:-1, :] + u[2:, :])     # shape (nx-1, ny)
-    u_w = 0.5 * (u[:-2,  :] + u[1:-1, :])   # shape (nx-1, ny)
+    u_w = 0.5 * (u[:-2, :] + u[1:-1, :])   # shape (nx-1, ny)
     duu_dx = (u_e**2 - u_w**2) / dx
 
     # --- d(vu)/dy ---
@@ -223,12 +223,12 @@ def convection_u(u: np.ndarray, v: np.ndarray,
     # u_n = (u[i, j] + u[i, j+1]) / 2
     u_n = np.empty((nx - 1, ny))
     u_n[:, :-1] = 0.5 * (u_int[:, :-1] + u_int[:, 1:])
-    u_n[:, -1]  = 0.5 * (u_int[:, -1] + u_ghost_top)
+    u_n[:, -1] = 0.5 * (u_int[:, -1] + u_ghost_top)
 
     # u_s = (u[i, j-1] + u[i, j]) / 2
     u_s = np.empty((nx - 1, ny))
     u_s[:, 1:] = 0.5 * (u_int[:, :-1] + u_int[:, 1:])
-    u_s[:, 0]  = 0.5 * (u_ghost_bot + u_int[:, 0])
+    u_s[:, 0] = 0.5 * (u_ghost_bot + u_int[:, 0])
 
     # v_n  (at y-face j+1)
     v_n = v_at_uf_x[:, 1:]    # shape (nx-1, ny)
@@ -274,11 +274,11 @@ def convection_v(u: np.ndarray, v: np.ndarray,
 
     v_e = np.empty((nx, ny - 1))
     v_e[:-1, :] = 0.5 * (v_int[:-1, :] + v_int[1:, :])
-    v_e[-1,  :] = 0.5 * (v_int[-1, :] + v_ghost_rgt)
+    v_e[-1, :] = 0.5 * (v_int[-1, :] + v_ghost_rgt)
 
     v_w = np.empty((nx, ny - 1))
-    v_w[1:,  :] = 0.5 * (v_int[:-1, :] + v_int[1:, :])
-    v_w[0,   :] = 0.5 * (v_ghost_lft + v_int[0, :])
+    v_w[1:, :] = 0.5 * (v_int[:-1, :] + v_int[1:, :])
+    v_w[0, :] = 0.5 * (v_ghost_lft + v_int[0, :])
 
     duv_dx = (u_e * v_e - u_w * v_w) / dx
 
