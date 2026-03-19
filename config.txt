@@ -22,6 +22,6 @@ save_dt = 0.5
 outdir = output
 
 # Features (true/false)
-cylinder = false
+cylinder = true
 plot = false
 verbose = true

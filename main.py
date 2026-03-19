@@ -51,19 +51,32 @@ from src.parallel import ParallelDecomposition
 from src.config import ConfigParser
 
 
-# ---------------------------------------------------------------------------
-# Argument parsing with config file support
-# ---------------------------------------------------------------------------
-
 def parse_args():
     """
     Parse command-line arguments and merge with config file.
 
     Command-line arguments take precedence over config file values.
+    All paths default to the script directory to ensure consistent output location.
     """
+    def str_to_bool(v):
+        """Convert string to boolean."""
+        if isinstance(v, bool):
+            return v
+        if v.lower() in ('yes', 'true', 't', 'y', '1'):
+            return True
+        elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+            return False
+        else:
+            raise argparse.ArgumentTypeError('Boolean value expected.')
+
+    # Get the directory where this script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    default_config = os.path.join(script_dir, "config.txt")
+    default_outdir = os.path.join(script_dir, "output")
+
     # First parse just the config file path
     p_pre = argparse.ArgumentParser(add_help=False)
-    p_pre.add_argument("--config", type=str, default="config.txt",
+    p_pre.add_argument("--config", type=str, default=default_config,
                        help="Path to configuration file")
     args_pre, remaining = p_pre.parse_known_args()
 
@@ -72,7 +85,7 @@ def parse_args():
 
     # Now parse all arguments with defaults from config file
     p = argparse.ArgumentParser(description="2-D Navier-Stokes solver")
-    p.add_argument("--config", type=str, default="config.txt",
+    p.add_argument("--config", type=str, default=default_config,
                    help="Path to configuration file")
     p.add_argument("--nx",       type=int,   default=cfg.get("nx", 64, int))
     p.add_argument("--ny",       type=int,   default=cfg.get("ny", 32, int))
@@ -87,10 +100,10 @@ def parse_args():
     p.add_argument("--save_dt",  type=float,
                    default=cfg.get("save_dt", 0.5, float))
     p.add_argument("--outdir",   type=str,
-                   default=cfg.get("outdir", "output", str))
-    p.add_argument("--cylinder", action="store_true", default=cfg.get("cylinder", False, bool),
+                   default=cfg.get("outdir", default_outdir, str))
+    p.add_argument("--cylinder", type=str_to_bool, default=cfg.get("cylinder", False, bool),
                    help="Add an immersed-boundary cylinder at the domain centre")
-    p.add_argument("--plot",     action="store_true", default=cfg.get("plot", False, bool),
+    p.add_argument("--plot",     type=str_to_bool, default=cfg.get("plot", False, bool),
                    help="Show matplotlib plots after simulation")
     return p.parse_args()
 
