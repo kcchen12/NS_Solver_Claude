@@ -1,0 +1,26 @@
+# NS_Solver Configuration - High Resolution Example
+# This is an example configuration file with higher resolution settings
+
+# Grid parameters
+nx = 128
+ny = 64
+
+# Domain dimensions
+lx = 4.0
+ly = 2.0
+
+# Physics parameters
+re = 200.0
+
+# Time integration
+t_end = 10.0
+cfl = 0.3
+
+# I/O parameters
+save_dt = 0.25
+outdir = output_highres
+
+# Features
+cylinder = true
+plot = true
+verbose = true

@@ -13,7 +13,7 @@ Simulates **uniform flow in a 2-D box** using:
 
 Usage
 -----
-Serial run::
+Serial run (reads from config.txt)::
 
     python main.py
 
@@ -21,17 +21,18 @@ Parallel run (4 MPI processes)::
 
     mpirun -n 4 python main.py
 
-Command-line arguments (all optional)::
+Command-line arguments override config file values::
 
-    --nx        Number of cells in x             [default: 64]
-    --ny        Number of cells in y             [default: 32]
-    --lx        Domain length in x               [default: 4.0]
-    --ly        Domain length in y               [default: 2.0]
-    --re        Reynolds number                  [default: 100]
-    --t_end     End time                         [default: 5.0]
-    --cfl       Target CFL number                [default: 0.4]
-    --save_dt   Interval between snapshots       [default: 0.5]
-    --outdir    Output directory                 [default: output]
+    --config    Path to config file              [default: config.txt]
+    --nx        Number of cells in x             [default: from config]
+    --ny        Number of cells in y             [default: from config]
+    --lx        Domain length in x               [default: from config]
+    --ly        Domain length in y               [default: from config]
+    --re        Reynolds number                  [default: from config]
+    --t_end     End time                         [default: from config]
+    --cfl       Target CFL number                [default: from config]
+    --save_dt   Interval between snapshots       [default: from config]
+    --outdir    Output directory                 [default: from config]
     --cylinder  Add an immersed-boundary cylinder [flag]
     --plot      Show matplotlib plots at the end  [flag]
 """
@@ -47,27 +48,45 @@ from src.solver    import FractionalStepSolver
 from src.ibm       import ImmersedBoundary
 from src.io_utils  import save_snapshot
 from src.parallel  import ParallelDecomposition
+from src.config    import ConfigParser
 
 
 # ---------------------------------------------------------------------------
-# Argument parsing
+# Argument parsing with config file support
 # ---------------------------------------------------------------------------
 
 def parse_args():
+    """
+    Parse command-line arguments and merge with config file.
+
+    Command-line arguments take precedence over config file values.
+    """
+    # First parse just the config file path
+    p_pre = argparse.ArgumentParser(add_help=False)
+    p_pre.add_argument("--config", type=str, default="config.txt",
+                       help="Path to configuration file")
+    args_pre, remaining = p_pre.parse_known_args()
+
+    # Read config file
+    cfg = ConfigParser(args_pre.config)
+
+    # Now parse all arguments with defaults from config file
     p = argparse.ArgumentParser(description="2-D Navier-Stokes solver")
-    p.add_argument("--nx",       type=int,   default=64)
-    p.add_argument("--ny",       type=int,   default=32)
-    p.add_argument("--lx",       type=float, default=4.0)
-    p.add_argument("--ly",       type=float, default=2.0)
-    p.add_argument("--re",       type=float, default=100.0,
+    p.add_argument("--config", type=str, default="config.txt",
+                   help="Path to configuration file")
+    p.add_argument("--nx",       type=int,   default=cfg.get("nx", 64, int))
+    p.add_argument("--ny",       type=int,   default=cfg.get("ny", 32, int))
+    p.add_argument("--lx",       type=float, default=cfg.get("lx", 4.0, float))
+    p.add_argument("--ly",       type=float, default=cfg.get("ly", 2.0, float))
+    p.add_argument("--re",       type=float, default=cfg.get("re", 100.0, float),
                    help="Reynolds number (Re = U_inf * L / nu)")
-    p.add_argument("--t_end",    type=float, default=5.0)
-    p.add_argument("--cfl",      type=float, default=0.4)
-    p.add_argument("--save_dt",  type=float, default=0.5)
-    p.add_argument("--outdir",   type=str,   default="output")
-    p.add_argument("--cylinder", action="store_true",
+    p.add_argument("--t_end",    type=float, default=cfg.get("t_end", 5.0, float))
+    p.add_argument("--cfl",      type=float, default=cfg.get("cfl", 0.4, float))
+    p.add_argument("--save_dt",  type=float, default=cfg.get("save_dt", 0.5, float))
+    p.add_argument("--outdir",   type=str,   default=cfg.get("outdir", "output", str))
+    p.add_argument("--cylinder", action="store_true", default=cfg.get("cylinder", False, bool),
                    help="Add an immersed-boundary cylinder at the domain centre")
-    p.add_argument("--plot",     action="store_true",
+    p.add_argument("--plot",     action="store_true", default=cfg.get("plot", False, bool),
                    help="Show matplotlib plots after simulation")
     return p.parse_args()
 
@@ -88,6 +107,7 @@ def run(args):
         print("=" * 60)
         print("  2-D Incompressible Navier-Stokes Solver")
         print("=" * 60)
+        print(f"  Config file   : {args.config}")
         print(f"  Grid          : {args.nx} x {args.ny}")
         print(f"  Domain        : {args.lx} x {args.ly}")
         print(f"  Reynolds no.  : {args.re}")

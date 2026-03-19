@@ -1,0 +1,27 @@
+# NS_Solver Configuration File
+# All lines starting with '#' are comments
+# Format: key = value
+
+# Grid parameters
+nx = 64
+ny = 32
+
+# Domain dimensions
+lx = 4.0
+ly = 2.0
+
+# Physics parameters
+re = 100.0
+
+# Time integration
+t_end = 5.0
+cfl = 0.4
+
+# I/O parameters
+save_dt = 0.5
+outdir = output
+
+# Features (true/false)
+cylinder = false
+plot = false
+verbose = true
