@@ -34,7 +34,8 @@ import numpy as np
 try:
     from mpi4py import MPI
     _MPI_AVAILABLE = True
-except ImportError:
+except Exception:
+    MPI = None
     _MPI_AVAILABLE = False
 
 
@@ -72,7 +73,7 @@ class ParallelDecomposition:
 
         # Global start/end row index for this rank
         self.j_start = sum(self.ny_local_list[:self.rank])
-        self.j_end   = self.j_start + self.ny_local  # exclusive
+        self.j_end = self.j_start + self.ny_local  # exclusive
 
     @property
     def is_parallel(self) -> bool:
@@ -99,11 +100,11 @@ class ParallelDecomposition:
             return u_local  # no-op in serial
 
         from mpi4py import MPI
-        comm  = self.comm
-        rank  = self.rank
-        size  = self.size
-        nx1   = u_local.shape[0]
-        ny_l  = u_local.shape[1]
+        comm = self.comm
+        rank = self.rank
+        size = self.size
+        nx1 = u_local.shape[0]
+        ny_l = u_local.shape[1]
 
         ghost_bot = np.empty(nx1, dtype=u_local.dtype)
         ghost_top = np.empty(nx1, dtype=u_local.dtype)

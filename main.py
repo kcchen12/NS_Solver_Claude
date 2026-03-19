@@ -42,13 +42,13 @@ import os
 import sys
 import numpy as np
 
-from src.grid      import CartesianGrid
-from src.boundary  import BoundaryConfig, BCType
-from src.solver    import FractionalStepSolver
-from src.ibm       import ImmersedBoundary
-from src.io_utils  import save_snapshot
-from src.parallel  import ParallelDecomposition
-from src.config    import ConfigParser
+from src.grid import CartesianGrid
+from src.boundary import BoundaryConfig, BCType
+from src.solver import FractionalStepSolver
+from src.ibm import ImmersedBoundary
+from src.io_utils import save_snapshot
+from src.parallel import ParallelDecomposition
+from src.config import ConfigParser
 
 
 # ---------------------------------------------------------------------------
@@ -80,10 +80,14 @@ def parse_args():
     p.add_argument("--ly",       type=float, default=cfg.get("ly", 2.0, float))
     p.add_argument("--re",       type=float, default=cfg.get("re", 100.0, float),
                    help="Reynolds number (Re = U_inf * L / nu)")
-    p.add_argument("--t_end",    type=float, default=cfg.get("t_end", 5.0, float))
-    p.add_argument("--cfl",      type=float, default=cfg.get("cfl", 0.4, float))
-    p.add_argument("--save_dt",  type=float, default=cfg.get("save_dt", 0.5, float))
-    p.add_argument("--outdir",   type=str,   default=cfg.get("outdir", "output", str))
+    p.add_argument("--t_end",    type=float,
+                   default=cfg.get("t_end", 5.0, float))
+    p.add_argument("--cfl",      type=float,
+                   default=cfg.get("cfl", 0.4, float))
+    p.add_argument("--save_dt",  type=float,
+                   default=cfg.get("save_dt", 0.5, float))
+    p.add_argument("--outdir",   type=str,
+                   default=cfg.get("outdir", "output", str))
     p.add_argument("--cylinder", action="store_true", default=cfg.get("cylinder", False, bool),
                    help="Add an immersed-boundary cylinder at the domain centre")
     p.add_argument("--plot",     action="store_true", default=cfg.get("plot", False, bool),
@@ -100,7 +104,7 @@ def run(args):
     # MPI setup
     # ------------------------------------------------------------------
     decomp = ParallelDecomposition(args.ny)
-    rank   = decomp.rank
+    rank = decomp.rank
     is_root = rank == 0
 
     if is_root:
@@ -130,12 +134,12 @@ def run(args):
     #   TOP    : no-slip wall
     # ------------------------------------------------------------------
     bc = BoundaryConfig(
-        left   = BCType.INFLOW,
-        right  = BCType.OUTFLOW,
-        bottom = BCType.WALL,
-        top    = BCType.WALL,
-        u_inf  = 1.0,
-        v_inf  = 0.0,
+        left=BCType.INFLOW,
+        right=BCType.OUTFLOW,
+        bottom=BCType.WALL,
+        top=BCType.WALL,
+        u_inf=1.0,
+        v_inf=0.0,
     )
 
     # ------------------------------------------------------------------
@@ -145,7 +149,7 @@ def run(args):
     if args.cylinder:
         cx = args.lx / 4.0        # cylinder centre x
         cy = args.ly / 2.0        # cylinder centre y
-        r  = args.ly / 8.0        # radius
+        r = args.ly / 8.0        # radius
         ibm.add_circle(cx, cy, r)
         if is_root:
             print(f"  IBM cylinder: centre=({cx:.2f},{cy:.2f}), r={r:.4f}")
@@ -167,7 +171,7 @@ def run(args):
     # Time loop
     # ------------------------------------------------------------------
     t_save_next = 0.0
-    step_count  = 0
+    step_count = 0
 
     if is_root:
         print(f"\n  Starting time loop …")
@@ -237,14 +241,16 @@ def _plot_results(solver, grid, args):
     im0 = axes[0].contourf(X, Y, speed, 50, cmap="viridis")
     fig.colorbar(im0, ax=axes[0])
     axes[0].set_title("Speed |u|")
-    axes[0].set_xlabel("x"); axes[0].set_ylabel("y")
+    axes[0].set_xlabel("x")
+    axes[0].set_ylabel("y")
     axes[0].set_aspect("equal")
 
     # Pressure
     im1 = axes[1].contourf(X, Y, solver.p, 50, cmap="RdBu_r")
     fig.colorbar(im1, ax=axes[1])
     axes[1].set_title("Pressure p")
-    axes[1].set_xlabel("x"); axes[1].set_ylabel("y")
+    axes[1].set_xlabel("x")
+    axes[1].set_ylabel("y")
     axes[1].set_aspect("equal")
 
     # Streamlines
@@ -252,7 +258,8 @@ def _plot_results(solver, grid, args):
                        u_c.T, v_c.T,
                        density=1.5, color=speed.T, cmap="plasma")
     axes[2].set_title("Streamlines")
-    axes[2].set_xlabel("x"); axes[2].set_ylabel("y")
+    axes[2].set_xlabel("x")
+    axes[2].set_ylabel("y")
     axes[2].set_aspect("equal")
 
     fig.suptitle(f"Re={args.re:.0f},  t={solver.t:.3f}")
