@@ -3,25 +3,29 @@
 # Format: key = value
 
 # Grid parameters
-nx = 64
-ny = 32
+nx = 128
+ny = 64
 
 # Domain dimensions
 lx = 4.0
 ly = 2.0
 
 # Physics parameters
-re = 100.0
+re = 200.0
 
 # Time integration
-t_end = 5.0
-cfl = 0.4
+t_end = 75.0
+cfl = 0.3
 
 # I/O parameters
-save_dt = 0.5
+save_dt = 0.25
 outdir = output
 
 # Features (true/false)
 cylinder = true
-plot = false
+# Cylinder radius in physical units (set > 0 to override default ly/8)
+cylinder_radius = 0.10
+# If true, re is interpreted as Re_D based on cylinder diameter
+re_is_cylinder_based = true
+plot = true
 verbose = true

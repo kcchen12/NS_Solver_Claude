@@ -181,33 +181,12 @@ def main(argv=None):
         vel_data = extract_velocity_field(data)
 
     # Extract main variable to plot
-    if args.show_quiver or args.streamlines:
-        # Quiver/streamlines mode: interpret as vector field
-        if arr.ndim == 3 and arr.shape[2] == 2:
-            vx = arr[:, :, 0]
-            vy = arr[:, :, 1]
-            img = np.hypot(vx, vy)  # magnitude
-        elif arr.ndim == 3 and arr.shape[0] == 2:
-            vx = arr[0, :, :]
-            vy = arr[1, :, :]
-            img = np.hypot(vx, vy)  # magnitude
-        else:
-            # fall back to scalar selection
-            try:
-                img = pick_slice_and_component(arr, args.slice, args.comp)
-            except Exception as e:
-                print("Cannot interpret array for vector plot:",
-                      e, file=sys.stderr)
-                sys.exit(5)
-            vx = vy = None
-    else:
-        try:
-            img = pick_slice_and_component(arr, args.slice, args.comp)
-        except Exception as e:
-            print(f"Error selecting slice/component: {e}", file=sys.stderr)
-            print("Available array shape:", arr.shape)
-            sys.exit(6)
-        vx = vy = None
+    try:
+        img = pick_slice_and_component(arr, args.slice, args.comp)
+    except Exception as e:
+        print(f"Error selecting slice/component: {e}", file=sys.stderr)
+        print("Available array shape:", arr.shape)
+        sys.exit(6)
 
     # Plot
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -216,66 +195,6 @@ def main(argv=None):
     ax.set_title(f"{os.path.basename(args.file)} : {key}",
                  fontsize=12, fontweight='bold')
     fig.colorbar(im, ax=ax, label=key)
-
-    # Add velocity visualization
-    if args.show_quiver and vx is not None and vy is not None:
-        # Overlay quiver plot (subsampled for clarity)
-        X = np.arange(0, img.shape[1])
-        Y = np.arange(0, img.shape[0])
-        XI, YI = np.meshgrid(X, Y)
-        step = max(1, args.quiver_density)
-
-        try:
-            ax.quiver(XI[::step, ::step], YI[::step, ::step],
-                      vx[::step, ::step], vy[::step, ::step],
-                      scale=1, scale_units='xy', angles='xy',
-                      alpha=0.6, width=0.003, color='white',
-                      edgecolor='none', label='Velocity')
-            ax.legend(loc='upper right', fontsize=10)
-        except Exception as e:
-            print(f"Warning: Could not overlay quiver: {e}", file=sys.stderr)
-
-    elif args.streamlines and vx is not None and vy is not None:
-        # Overlay streamlines for smooth velocity visualization
-        X = np.arange(0, img.shape[1])
-        Y = np.arange(0, img.shape[0])
-        XI, YI = np.meshgrid(X, Y)
-
-        try:
-            # Create streamlines with colored arrows
-            speed = np.hypot(vx, vy)
-            lw = 2 * speed / speed.max()  # Line width varies with speed
-            strm = ax.streamplot(XI[0, :], YI[:, 0], vx, vy,
-                                 color=speed, cmap='hot', linewidth=lw,
-                                 density=1.5, arrowsize=1.5)
-        except Exception as e:
-            print(
-                f"Warning: Could not overlay streamlines: {e}", file=sys.stderr)
-
-    elif vel_data is not None and not args.no_velocity_overlay and not args.show_quiver and not args.streamlines:
-        # Automatically overlay velocity field if plotting a scalar and velocity is available
-        vx_auto, vy_auto = vel_data
-
-        # Handle 3D velocity data - take same slice as main variable
-        if vx_auto.ndim == 3 and img.ndim == 2:
-            z = img.shape[0] // 2 if args.slice is None else args.slice
-            vx_auto = vx_auto[z, :, :]
-            vy_auto = vy_auto[z, :, :]
-
-        if vx_auto.shape == img.shape and vy_auto.shape == img.shape:
-            X = np.arange(0, img.shape[1])
-            Y = np.arange(0, img.shape[0])
-            XI, YI = np.meshgrid(X, Y)
-            step = max(1, args.quiver_density)
-
-            try:
-                ax.quiver(XI[::step, ::step], YI[::step, ::step],
-                          vx_auto[::step, ::step], vy_auto[::step, ::step],
-                          scale=1, scale_units='xy', angles='xy',
-                          alpha=0.5, width=0.002, color='red',
-                          edgecolor='none')
-            except Exception:
-                pass  # Silently skip if overlay fails
 
     ax.set_xlabel('x', fontsize=10)
     ax.set_ylabel('y', fontsize=10)

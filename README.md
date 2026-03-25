@@ -176,3 +176,45 @@ By default, plots are automatically saved to the `images/` directory in PNG form
 --save FILE                Save plot to file (saves to images/ folder)
 ```
 
+## Strouhal Number Evaluation
+
+Use `evaluate_strouhal.py` to compute dominant frequencies from a point probe
+of `u`, `v`, and `p`, then convert to Strouhal number:
+
+$$
+St = \frac{fL}{U}
+$$
+
+### Example (Cylinder Case)
+
+For the default cylinder setup in `main.py`, the cylinder diameter is
+`D = ly/4`. You can use that directly as the characteristic length scale:
+
+```bash
+python evaluate_strouhal.py --probe-x 1.5 --probe-y 1.1 --use-cylinder-diameter --t-min 1.0
+```
+
+To also save a plain-text summary report (including Combined Strouhal):
+
+```bash
+python evaluate_strouhal.py --probe-x 1.5 --probe-y 1.1 --use-cylinder-diameter --t-min 1.0 --save-report output/strouhal_report.txt
+```
+
+### Strouhal Script Options
+
+```
+--indir DIR                Snapshot directory (default: output)
+--pattern GLOB             Snapshot filename pattern (default: snap_*.npz)
+--probe-x FLOAT            Probe x coordinate (required)
+--probe-y FLOAT            Probe y coordinate (required)
+--u-ref FLOAT              Reference velocity U (default: 1.0)
+--length-scale FLOAT       Characteristic length L (default: 1.0)
+--use-cylinder-diameter    Use L = ly/4 (consistent with default cylinder)
+--t-min FLOAT              Ignore data before this time (default: 1.0)
+--f-min FLOAT              Min frequency for search (default: 0.05)
+--f-max FLOAT              Max frequency for search (default: 2.0)
+--n-freq INT               Number of frequency samples (default: 4000)
+--save-series FILE.csv     Export probe time series as CSV
+--save-report FILE.txt     Export Strouhal summary report as TXT
+```
+

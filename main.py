@@ -103,8 +103,16 @@ def parse_args():
                    default=cfg.get("outdir", default_outdir, str))
     p.add_argument("--cylinder", type=str_to_bool, default=cfg.get("cylinder", False, bool),
                    help="Add an immersed-boundary cylinder at the domain centre")
+    p.add_argument("--cylinder-radius", type=float,
+                   default=cfg.get("cylinder_radius", -1.0, float),
+                   help="Cylinder radius in physical units (<=0 uses default ly/8)")
+    p.add_argument("--re-is-cylinder-based", type=str_to_bool,
+                   default=cfg.get("re_is_cylinder_based", True, bool),
+                   help="Interpret --re as Re_D based on cylinder diameter when cylinder is enabled")
     p.add_argument("--plot",     type=str_to_bool, default=cfg.get("plot", False, bool),
                    help="Show matplotlib plots after simulation")
+    p.add_argument("--verbose",  type=str_to_bool, default=cfg.get("verbose", True, bool),
+                   help="Print periodic diagnostics during the time loop")
     return p.parse_args()
 
 
@@ -120,7 +128,7 @@ def run(args):
     rank = decomp.rank
     is_root = rank == 0
 
-    if is_root:
+    if is_root and args.verbose:
         print("=" * 60)
         print("  2-D Incompressible Navier-Stokes Solver")
         print("=" * 60)
@@ -159,18 +167,29 @@ def run(args):
     # Immersed boundary (optional cylinder)
     # ------------------------------------------------------------------
     ibm = ImmersedBoundary(grid)
+    r = None
     if args.cylinder:
         cx = args.lx / 4.0        # cylinder centre x
         cy = args.ly / 2.0        # cylinder centre y
-        r = args.ly / 8.0        # radius
+        r = args.cylinder_radius if args.cylinder_radius > 0.0 else args.ly / 8.0
         ibm.add_circle(cx, cy, r)
-        if is_root:
+        if is_root and args.verbose:
             print(f"  IBM cylinder: centre=({cx:.2f},{cy:.2f}), r={r:.4f}")
 
     # ------------------------------------------------------------------
     # Solver
     # ------------------------------------------------------------------
-    nu = 1.0 / args.re   # kinematic viscosity (U=1, L=1 reference scales)
+    if args.cylinder and args.re_is_cylinder_based and r is not None:
+        d_cyl = 2.0 * r
+        nu = bc.u_inf * d_cyl / args.re
+    else:
+        nu = 1.0 / args.re
+
+    if is_root and args.verbose and args.cylinder and args.re_is_cylinder_based and r is not None:
+        d_cyl = 2.0 * r
+        print(
+            f"  Re interpretation: Re_D={args.re} with D={d_cyl:.4f} -> nu={nu:.6g}")
+
     solver = FractionalStepSolver(grid, bc, nu, ibm=ibm)
     solver.init_fields(u0=bc.u_inf, v0=bc.v_inf)
 
@@ -186,7 +205,7 @@ def run(args):
     t_save_next = 0.0
     step_count = 0
 
-    if is_root:
+    if is_root and args.verbose:
         print(f"\n  Starting time loop …")
 
     while solver.t < args.t_end - 1e-12:
@@ -197,7 +216,7 @@ def run(args):
         step_count += 1
 
         # ---- diagnostics ----
-        if is_root and step_count % 50 == 0:
+        if is_root and args.verbose and step_count % 50 == 0:
             div_max = np.max(np.abs(solver.divergence()))
             cfl_val = solver.cfl(dt)
             print(f"  t={solver.t:8.4f}  dt={dt:.2e}  "
@@ -214,7 +233,7 @@ def run(args):
                               solver.t, meta=meta, fmt="numpy")
             t_save_next += args.save_dt
 
-    if is_root:
+    if is_root and args.verbose:
         print(f"\n  Done.  t_final={solver.t:.4f},  steps={step_count}")
 
     # ------------------------------------------------------------------
