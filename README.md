@@ -217,4 +217,3 @@ python evaluate_strouhal.py --probe-x 1.5 --probe-y 1.1 --use-cylinder-diameter 
 --save-series FILE.csv     Export probe time series as CSV
 --save-report FILE.txt     Export Strouhal summary report as TXT
 ```
-
