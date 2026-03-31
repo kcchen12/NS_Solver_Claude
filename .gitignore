@@ -1,6 +1,6 @@
 .venv/
 .pytest_cache/
-output/*.npz
+output/
 results/comparison_reports/
 **/__pycache__/
 *.pyc
