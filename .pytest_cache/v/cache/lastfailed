@@ -1,5 +1,0 @@
-{
-  "tests/test_solver.py::TestUniformFlow::test_divergence_free_after_steps": true,
-  "tests/test_solver.py::TestUniformFlow::test_uniform_u_preserved": true,
-  "tests/test_solver.py::TestUniformFlow::test_v_remains_zero": true
-}

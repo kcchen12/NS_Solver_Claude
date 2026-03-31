@@ -1,0 +1,7 @@
+.venv/
+.pytest_cache/
+output/*.npz
+results/comparison_reports/
+**/__pycache__/
+*.pyc
+NS_Solver/
