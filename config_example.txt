@@ -1,6 +1,5 @@
-# NS_Solver Configuration File
-# All lines starting with '#' are comments
-# Format: key = value
+# NS_Solver Configuration Example
+# Example configuration with boundary-condition controls
 
 # Grid parameters
 nx = 128
@@ -38,18 +37,14 @@ outflow_mode = convective
 outflow_speed = 1.0
 
 # Time integration
-t_end = 100.0
-cfl = 0.5
+t_end = 10.0
+cfl = 0.3
 
 # I/O parameters
-save_dt = 0.05
-outdir = output
+save_dt = 0.25
+outdir = output_highres
 
-# Features (true/false)
+# Features
 cylinder = true
-# Cylinder radius in physical units (set > 0 to override default ly/8)
-cylinder_radius = 0.5
-# If true, re is interpreted as Re_D based on cylinder diameter
-re_is_cylinder_based = true
 plot = true
 verbose = true

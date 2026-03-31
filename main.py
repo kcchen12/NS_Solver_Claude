@@ -51,6 +51,18 @@ from src.parallel import ParallelDecomposition
 from src.config import ConfigParser
 
 
+def _normalize_bc_type(raw_value: str, default: str) -> str:
+    value = str(raw_value).strip().lower()
+    valid = {
+        BCType.INFLOW,
+        BCType.FARFIELD,
+        BCType.OUTFLOW,
+        BCType.WALL,
+        BCType.PERIODIC,
+    }
+    return value if value in valid else default
+
+
 def parse_args():
     """
     Parse command-line arguments and merge with config file.
@@ -113,6 +125,44 @@ def parse_args():
                    help="Show matplotlib plots after simulation")
     p.add_argument("--verbose",  type=str_to_bool, default=cfg.get("verbose", True, bool),
                    help="Print periodic diagnostics during the time loop")
+
+    # Boundary condition configuration
+    p.add_argument("--bc-left", type=str,
+                   default=cfg.get("bc_left", BCType.INFLOW, str),
+                   help="Left boundary type: inflow/farfield/outflow/wall/periodic")
+    p.add_argument("--bc-right", type=str,
+                   default=cfg.get("bc_right", BCType.OUTFLOW, str),
+                   help="Right boundary type: inflow/farfield/outflow/wall/periodic")
+    p.add_argument("--bc-bottom", type=str,
+                   default=cfg.get("bc_bottom", BCType.WALL, str),
+                   help="Bottom boundary type: inflow/farfield/outflow/wall/periodic")
+    p.add_argument("--bc-top", type=str,
+                   default=cfg.get("bc_top", BCType.WALL, str),
+                   help="Top boundary type: inflow/farfield/outflow/wall/periodic")
+    p.add_argument("--inflow-u", type=float,
+                   default=cfg.get("inflow_u", 1.0, float),
+                   help="Inflow/farfield x-velocity component")
+    p.add_argument("--inflow-v", type=float,
+                   default=cfg.get("inflow_v", 0.0, float),
+                   help="Inflow/farfield y-velocity component")
+    p.add_argument("--inflow-w", type=float,
+                   default=cfg.get("inflow_w", 0.0, float),
+                   help="Inflow/farfield z-velocity component for 3-D")
+    p.add_argument("--wall-slip-mode", type=str,
+                   default=cfg.get("wall_slip_mode", "no-slip", str),
+                   help="Wall tangential model: no-slip or free-slip")
+    p.add_argument("--wall-penetration", type=str_to_bool,
+                   default=cfg.get("wall_penetration", False, bool),
+                   help="Allow non-zero wall-normal velocity on wall boundaries")
+    p.add_argument("--wall-normal-velocity", type=float,
+                   default=cfg.get("wall_normal_velocity", 0.0, float),
+                   help="Wall-normal velocity used when wall_penetration=true")
+    p.add_argument("--outflow-mode", type=str,
+                   default=cfg.get("outflow_mode", "convective", str),
+                   help="Outflow update mode: convective or zero-gradient")
+    p.add_argument("--outflow-speed", type=float,
+                   default=cfg.get("outflow_speed", 1.0, float),
+                   help="Convective outflow wave speed")
     return p.parse_args()
 
 
@@ -148,19 +198,26 @@ def run(args):
                          lx=args.lx, ly=args.ly)
 
     # ------------------------------------------------------------------
-    # Boundary conditions
-    #   LEFT   : inflow  (u = 1, v = 0)
-    #   RIGHT  : convective outflow
-    #   BOTTOM : no-slip wall
-    #   TOP    : no-slip wall
+    # Boundary conditions (fully configurable from config/CLI)
     # ------------------------------------------------------------------
+    bc_left = _normalize_bc_type(args.bc_left, BCType.INFLOW)
+    bc_right = _normalize_bc_type(args.bc_right, BCType.OUTFLOW)
+    bc_bottom = _normalize_bc_type(args.bc_bottom, BCType.WALL)
+    bc_top = _normalize_bc_type(args.bc_top, BCType.WALL)
+
     bc = BoundaryConfig(
-        left=BCType.INFLOW,
-        right=BCType.OUTFLOW,
-        bottom=BCType.WALL,
-        top=BCType.WALL,
-        u_inf=1.0,
-        v_inf=0.0,
+        left=bc_left,
+        right=bc_right,
+        bottom=bc_bottom,
+        top=bc_top,
+        u_inf=args.inflow_u,
+        v_inf=args.inflow_v,
+        w_inf=args.inflow_w,
+        wall_slip_mode=str(args.wall_slip_mode).strip().lower(),
+        wall_penetration=bool(args.wall_penetration),
+        wall_normal_velocity=args.wall_normal_velocity,
+        outflow_mode=str(args.outflow_mode).strip().lower(),
+        outflow_speed=args.outflow_speed,
     )
 
     # ------------------------------------------------------------------
@@ -297,7 +354,10 @@ def _plot_results(solver, grid, args):
     fig.suptitle(f"Re={args.re:.0f},  t={solver.t:.3f}")
     fig.tight_layout()
 
-    plot_path = os.path.join(args.outdir, "result.png")
+    results_dir = os.path.join(os.path.dirname(
+        os.path.abspath(__file__)), "results")
+    os.makedirs(results_dir, exist_ok=True)
+    plot_path = os.path.join(results_dir, "result.png")
     fig.savefig(plot_path, dpi=150)
     print(f"  Plot saved to {plot_path}")
     plt.close(fig)

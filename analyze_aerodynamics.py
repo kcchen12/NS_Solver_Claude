@@ -24,6 +24,9 @@ import numpy as np
 from scipy.signal import lombscargle
 
 
+DEFAULT_RESULTS_DIR = "results"
+
+
 @dataclass
 class SpectralResult:
     freq: float
@@ -491,8 +494,10 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--save-series", type=str, default=None,
                         help="Optional CSV path for combined time series")
-    parser.add_argument("--save-report", type=str, default=None,
-                        help="Optional TXT path for comprehensive report")
+    parser.add_argument("--save-report", type=str,
+                        default=os.path.join(
+                            DEFAULT_RESULTS_DIR, "aero_report.txt"),
+                        help="TXT path for comprehensive report (default: results/aero_report.txt)")
 
     return parser.parse_args()
 

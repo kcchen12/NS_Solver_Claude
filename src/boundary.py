@@ -36,11 +36,21 @@ from src.grid import CartesianGrid
 # ---------------------------------------------------------------------------
 
 class BCType:
-    INFLOW   = "inflow"
+    INFLOW = "inflow"
     FARFIELD = "farfield"
-    OUTFLOW  = "outflow"   # convective outflow
-    WALL     = "wall"      # no-slip / no-penetration
+    OUTFLOW = "outflow"   # convective outflow
+    WALL = "wall"      # no-slip / no-penetration
     PERIODIC = "periodic"
+
+
+class WallSlipMode:
+    NO_SLIP = "no-slip"
+    FREE_SLIP = "free-slip"
+
+
+class OutflowMode:
+    CONVECTIVE = "convective"
+    ZERO_GRADIENT = "zero-gradient"
 
 
 # ---------------------------------------------------------------------------
@@ -62,16 +72,42 @@ class BoundaryConfig:
 
     def __init__(self, left: str, right: str, bottom: str, top: str,
                  front: str = BCType.WALL, back: str = BCType.WALL,
-                 u_inf: float = 1.0, v_inf: float = 0.0, w_inf: float = 0.0):
-        self.left   = left
-        self.right  = right
+                 u_inf: float = 1.0, v_inf: float = 0.0, w_inf: float = 0.0,
+                 wall_slip_mode: str = WallSlipMode.NO_SLIP,
+                 wall_penetration: bool = False,
+                 wall_normal_velocity: float = 0.0,
+                 outflow_mode: str = OutflowMode.CONVECTIVE,
+                 outflow_speed: float = None):
+        self.left = left
+        self.right = right
         self.bottom = bottom
-        self.top    = top
-        self.front  = front    # z = 0  (3-D)
-        self.back   = back     # z = Lz (3-D)
-        self.u_inf  = u_inf
-        self.v_inf  = v_inf
-        self.w_inf  = w_inf
+        self.top = top
+        self.front = front    # z = 0  (3-D)
+        self.back = back     # z = Lz (3-D)
+        self.u_inf = u_inf
+        self.v_inf = v_inf
+        self.w_inf = w_inf
+        self.wall_slip_mode = wall_slip_mode
+        self.wall_penetration = wall_penetration
+        self.wall_normal_velocity = wall_normal_velocity
+        self.outflow_mode = outflow_mode
+        self.outflow_speed = outflow_speed
+
+
+def _is_free_slip(bc: BoundaryConfig) -> bool:
+    return str(bc.wall_slip_mode).lower() == WallSlipMode.FREE_SLIP
+
+
+def _wall_normal_velocity(bc: BoundaryConfig) -> float:
+    if bc.wall_penetration:
+        return float(bc.wall_normal_velocity)
+    return 0.0
+
+
+def _outflow_convective_speed(bc: BoundaryConfig, normal_reference: float) -> float:
+    if bc.outflow_speed is not None:
+        return max(abs(float(bc.outflow_speed)), 1e-10)
+    return max(abs(float(normal_reference)), 1e-10)
 
 
 # ---------------------------------------------------------------------------
@@ -124,14 +160,20 @@ def apply_velocity_bc(u: np.ndarray, v: np.ndarray,
     # ---------------------------------------------------------------
     # LEFT boundary  (u[0, :] is the left domain face)
     # ---------------------------------------------------------------
+    free_slip = _is_free_slip(bc)
+    wall_vn = _wall_normal_velocity(bc)
+
     if bc.left in (BCType.INFLOW, BCType.FARFIELD):
         u[0, :] = bc.u_inf
         # v at left domain edge – set via linear extrapolation / Dirichlet
         v[0, :] = bc.v_inf        # v-face at i=0 matches free stream
 
     elif bc.left == BCType.WALL:
-        u[0, :] = 0.0
-        v[0, :] = _ghost_no_slip(v[1, :], 0.0)   # ghost in x for v
+        u[0, :] = wall_vn
+        if free_slip:
+            v[0, :] = v[1, :]
+        else:
+            v[0, :] = _ghost_no_slip(v[1, :], 0.0)   # ghost in x for v
 
     elif bc.left == BCType.PERIODIC:
         pass  # handled externally
@@ -140,11 +182,8 @@ def apply_velocity_bc(u: np.ndarray, v: np.ndarray,
     # RIGHT boundary  (u[nx, :] is the right domain face)
     # ---------------------------------------------------------------
     if bc.right == BCType.OUTFLOW:
-        # Convective outflow:  du/dt + U_c * du/dx = 0
-        # Explicit Euler update for the boundary face value:
-        #   u_new = u_old - dt * U_c * (u_old - u[nx-1, :]) / dx
-        if dt is not None:
-            Uc = max(bc.u_inf, 1e-10)
+        if dt is not None and str(bc.outflow_mode).lower() == OutflowMode.CONVECTIVE:
+            Uc = _outflow_convective_speed(bc, bc.u_inf)
             cfl = Uc * dt / grid.dx
             u[nx, :] = u[nx, :] - cfl * (u[nx, :] - u[nx - 1, :])
         else:
@@ -157,8 +196,11 @@ def apply_velocity_bc(u: np.ndarray, v: np.ndarray,
         v[nx - 1, :] = bc.v_inf
 
     elif bc.right == BCType.WALL:
-        u[nx, :] = 0.0
-        v[nx - 1, :] = _ghost_no_slip(v[nx - 2, :], 0.0)
+        u[nx, :] = wall_vn
+        if free_slip:
+            v[nx - 1, :] = v[nx - 2, :]
+        else:
+            v[nx - 1, :] = _ghost_no_slip(v[nx - 2, :], 0.0)
 
     elif bc.right == BCType.PERIODIC:
         pass
@@ -167,16 +209,18 @@ def apply_velocity_bc(u: np.ndarray, v: np.ndarray,
     # BOTTOM boundary  (v[:, 0] is the bottom domain face)
     # ---------------------------------------------------------------
     if bc.bottom == BCType.WALL:
-        v[:, 0] = 0.0      # no penetration
-        # u tangential component enforcement done via ghost cells in operators
+        v[:, 0] = wall_vn
+        if free_slip:
+            u[1:-1, 0] = u[1:-1, 1]
+        # no-slip tangential component enforcement handled via ghost cells in operators
 
     elif bc.bottom in (BCType.INFLOW, BCType.FARFIELD):
         v[:, 0] = bc.v_inf
         u[1:-1, 0] = bc.u_inf   # interior x-faces at j=0
 
     elif bc.bottom == BCType.OUTFLOW:
-        if dt is not None:
-            Vc = bc.v_inf
+        if dt is not None and str(bc.outflow_mode).lower() == OutflowMode.CONVECTIVE:
+            Vc = _outflow_convective_speed(bc, bc.v_inf)
             cfl = abs(Vc) * dt / grid.dy
             v[:, 0] = v[:, 0] - cfl * (v[:, 0] - v[:, 1])
         else:
@@ -190,15 +234,17 @@ def apply_velocity_bc(u: np.ndarray, v: np.ndarray,
     # TOP boundary  (v[:, ny] is the top domain face)
     # ---------------------------------------------------------------
     if bc.top == BCType.WALL:
-        v[:, ny] = 0.0     # no penetration
+        v[:, ny] = wall_vn
+        if free_slip:
+            u[1:-1, ny - 1] = u[1:-1, ny - 2]
 
     elif bc.top in (BCType.INFLOW, BCType.FARFIELD):
         v[:, ny] = bc.v_inf
         u[1:-1, ny - 1] = bc.u_inf
 
     elif bc.top == BCType.OUTFLOW:
-        if dt is not None:
-            Vc = max(abs(bc.v_inf), 1e-10)
+        if dt is not None and str(bc.outflow_mode).lower() == OutflowMode.CONVECTIVE:
+            Vc = _outflow_convective_speed(bc, bc.v_inf)
             cfl = Vc * dt / grid.dy
             v[:, ny] = v[:, ny] - cfl * (v[:, ny] - v[:, ny - 1])
         else:
@@ -225,9 +271,9 @@ def apply_velocity_bc(u: np.ndarray, v: np.ndarray,
 
 
 def apply_post_correction_bc(u: np.ndarray, v: np.ndarray,
-                              grid: CartesianGrid, bc: BoundaryConfig,
-                              dt: float = None,
-                              w: np.ndarray = None) -> None:
+                             grid: CartesianGrid, bc: BoundaryConfig,
+                             dt: float = None,
+                             w: np.ndarray = None) -> None:
     """
     Apply only the *essential* boundary conditions after the pressure-
     correction step.
@@ -247,16 +293,21 @@ def apply_post_correction_bc(u: np.ndarray, v: np.ndarray,
     nx, ny = grid.nx, grid.ny
 
     # LEFT: enforce normal inflow velocity only; don't touch v[0, :]
+    free_slip = _is_free_slip(bc)
+    wall_vn = _wall_normal_velocity(bc)
+
     if bc.left in (BCType.INFLOW, BCType.FARFIELD):
         u[0, :] = bc.u_inf
 
     elif bc.left == BCType.WALL:
-        u[0, :] = 0.0
+        u[0, :] = wall_vn
+        if free_slip:
+            v[0, :] = v[1, :]
 
     # RIGHT: convective outflow or prescribed
     if bc.right == BCType.OUTFLOW:
-        if dt is not None:
-            Uc = max(bc.u_inf, 1e-10)
+        if dt is not None and str(bc.outflow_mode).lower() == OutflowMode.CONVECTIVE:
+            Uc = _outflow_convective_speed(bc, bc.u_inf)
             cfl = Uc * dt / grid.dx
             u[nx, :] = u[nx, :] - cfl * (u[nx, :] - u[nx - 1, :])
         else:
@@ -265,14 +316,18 @@ def apply_post_correction_bc(u: np.ndarray, v: np.ndarray,
     elif bc.right in (BCType.INFLOW, BCType.FARFIELD):
         u[nx, :] = bc.u_inf
     elif bc.right == BCType.WALL:
-        u[nx, :] = 0.0
+        u[nx, :] = wall_vn
+        if free_slip:
+            v[nx - 1, :] = v[nx - 2, :]
 
     # BOTTOM: no-penetration wall (v[:, 0] = 0)
     if bc.bottom == BCType.WALL:
-        v[:, 0] = 0.0
+        v[:, 0] = wall_vn
+        if free_slip:
+            u[1:-1, 0] = u[1:-1, 1]
     elif bc.bottom == BCType.OUTFLOW:
-        if dt is not None:
-            Vc = bc.v_inf
+        if dt is not None and str(bc.outflow_mode).lower() == OutflowMode.CONVECTIVE:
+            Vc = _outflow_convective_speed(bc, bc.v_inf)
             cfl = abs(Vc) * dt / grid.dy
             v[:, 0] = v[:, 0] - cfl * (v[:, 0] - v[:, 1])
         else:
@@ -280,10 +335,12 @@ def apply_post_correction_bc(u: np.ndarray, v: np.ndarray,
 
     # TOP: no-penetration wall (v[:, ny] = 0)
     if bc.top == BCType.WALL:
-        v[:, ny] = 0.0
+        v[:, ny] = wall_vn
+        if free_slip:
+            u[1:-1, ny - 1] = u[1:-1, ny - 2]
     elif bc.top == BCType.OUTFLOW:
-        if dt is not None:
-            Vc = max(abs(bc.v_inf), 1e-10)
+        if dt is not None and str(bc.outflow_mode).lower() == OutflowMode.CONVECTIVE:
+            Vc = _outflow_convective_speed(bc, bc.v_inf)
             cfl = Vc * dt / grid.dy
             v[:, ny] = v[:, ny] - cfl * (v[:, ny] - v[:, ny - 1])
         else:
@@ -337,5 +394,5 @@ def apply_pressure_bc(phi: np.ndarray,
 
     if grid.is_3d:
         nz = grid.nz
-        phi[..., 0]      = phi[..., 1]
+        phi[..., 0] = phi[..., 1]
         phi[..., nz - 1] = phi[..., nz - 2]

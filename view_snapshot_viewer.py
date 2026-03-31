@@ -6,16 +6,13 @@ Usage examples:
   python view_snapshot_viewer.py --list
 
   # plot a named variable from a snapshot file
-  python view_snapshot_viewer.py output/snap_005.0000.npz -k velocity --comp 0
+    python view_snapshot_viewer.py output/snap_005.0000.npz -k u
 
-  # plot the latest snapshot, component 1, save to PNG
+    # plot the latest pressure snapshot and save to PNG
   python view_snapshot_viewer.py -k pressure --save out.png
 
-  # plot with velocity arrows overlaid
-  python view_snapshot_viewer.py -k pressure --show-quiver
-
-  # plot velocity field with streamlines
-  python view_snapshot_viewer.py -k velocity --streamlines
+    # plot drag/lift coefficient histories from output CSVs
+    python view_snapshot_viewer.py --plot-coeffs --save coeff_history.png
 
 The script attempts to guess array layouts but accepts explicit --slice and --comp parameters.
 """
@@ -29,15 +26,13 @@ from typing import Optional, Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
-from matplotlib.cm import ScalarMappable
 
 
-def ensure_images_dir(images_dir: str = "images") -> str:
-    """Ensure the images directory exists."""
-    if not os.path.exists(images_dir):
-        os.makedirs(images_dir)
-    return images_dir
+def ensure_results_dir(results_dir: str = "results") -> str:
+    """Ensure the results directory exists."""
+    if not os.path.exists(results_dir):
+        os.makedirs(results_dir)
+    return results_dir
 
 
 def find_latest_snapshot(dirpath: str = "output", pattern: str = "snap_*.npz") -> Optional[str]:
@@ -45,35 +40,177 @@ def find_latest_snapshot(dirpath: str = "output", pattern: str = "snap_*.npz") -
     return paths[-1] if paths else None
 
 
-def extract_velocity_field(data: dict) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-    """Try to find and extract velocity components from the data dictionary."""
-    # Look for 'velocity' key directly
-    if 'velocity' in data:
-        vel = np.array(data['velocity'])
-        if vel.ndim == 3 and vel.shape[2] == 2:
-            return vel[:, :, 0], vel[:, :, 1]
-        elif vel.ndim == 3 and vel.shape[0] == 2:
-            return vel[0, :, :], vel[1, :, :]
-        elif vel.ndim == 4 and vel.shape[3] == 2:  # 3D data
-            return vel[:, :, :, 0], vel[:, :, :, 1]
-        elif vel.ndim == 4 and vel.shape[0] == 2:  # 3D data
-            return vel[0, :, :, :], vel[1, :, :, :]
-
-    # Look for 'u' and 'v' keys
-    if 'u' in data and 'v' in data:
-        u = np.array(data['u'])
-        v = np.array(data['v'])
-        if u.ndim == 3 and u.shape[0] <= 4:  # (comp, ny, nx) format
-            return u[0, :, :] if u.shape[0] == 1 else u, v[0, :, :] if v.shape[0] == 1 else v
-        return u, v
-
+def find_coeff_series_file(indir: str = "output") -> Optional[str]:
+    """Find a coefficient time-series CSV, preferring forces.csv then aero.csv."""
+    candidates = [
+        os.path.join(indir, "forces.csv"),
+        os.path.join(indir, "aero.csv"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
     return None
 
 
-def is_velocity_field(key: str) -> bool:
-    """Check if a key is likely a velocity field."""
-    key_lower = key.lower()
-    return 'velocity' in key_lower or 'vel' in key_lower or key_lower in ['u', 'v', 'w']
+def load_coeff_series(path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load t, c_d, c_l from a CSV produced by aerodynamic analysis scripts."""
+    arr = np.genfromtxt(path, delimiter=",", names=True)
+    if arr.size == 0:
+        raise ValueError(f"No rows found in coefficient file: {path}")
+
+    names = arr.dtype.names or ()
+    required = {"t", "c_d", "c_l"}
+    if not required.issubset(set(names)):
+        raise ValueError(
+            f"CSV missing required columns {sorted(required)}. Found: {list(names)}"
+        )
+
+    t = np.atleast_1d(arr["t"]).astype(float)
+    c_d = np.atleast_1d(arr["c_d"]).astype(float)
+    c_l = np.atleast_1d(arr["c_l"]).astype(float)
+    return t, c_d, c_l
+
+
+def _derive_oscillation_save_name(save_name: str) -> str:
+    """Append an oscillation-only suffix before file extension."""
+    root, ext = os.path.splitext(save_name)
+    ext = ext if ext else ".png"
+    return f"{root}_oscillation_only{ext}"
+
+
+def _count_sign_changes(values: np.ndarray) -> int:
+    """Count sign flips in a 1-D signal, skipping zeros."""
+    signs = np.sign(values)
+    signs = signs[signs != 0]
+    if signs.size <= 1:
+        return 0
+    return int(np.sum(signs[1:] * signs[:-1] < 0))
+
+
+def detect_oscillation_start_index(
+    t: np.ndarray,
+    c_l: np.ndarray,
+    c_d: Optional[np.ndarray] = None,
+) -> int:
+    """Estimate where oscillation amplitude has reached a stable regime."""
+    n = len(c_l)
+    if n < 30:
+        return 0
+
+    # Remove mean so amplitude/zero-crossing checks are transient-insensitive.
+    c_l_centered = c_l - np.mean(c_l)
+    c_d_centered = None
+    if c_d is not None:
+        c_d_centered = c_d - np.mean(c_d)
+
+    w = max(18, n // 24)
+    step = max(4, w // 4)
+    starts = list(range(0, n - w + 1, step))
+    if not starts:
+        return 0
+
+    amp_l = np.zeros(len(starts), dtype=float)
+    amp_d = np.zeros(len(starts), dtype=float)
+    osc_ok = np.zeros(len(starts), dtype=bool)
+
+    for k, i0 in enumerate(starts):
+        i1 = i0 + w
+        seg_l = c_l_centered[i0:i1]
+        amp_l[k] = float(np.percentile(seg_l, 95) - np.percentile(seg_l, 5))
+        osc_ok[k] = _count_sign_changes(seg_l) >= 3
+
+        if c_d_centered is not None:
+            seg_d = c_d_centered[i0:i1]
+            amp_d[k] = float(np.percentile(seg_d, 95) -
+                             np.percentile(seg_d, 5))
+
+    valid = np.where(osc_ok)[0]
+    if valid.size == 0:
+        return 0
+
+    tail_count = min(6, valid.size)
+    tail_idx = valid[-tail_count:]
+    target_l = max(float(np.median(amp_l[tail_idx])), 1e-12)
+    if c_d_centered is not None:
+        target_d = max(float(np.median(amp_d[tail_idx])), 1e-12)
+    else:
+        target_d = 1.0
+
+    hold = 4
+    tol = 0.15
+    max_k = len(starts) - hold
+    for k in range(max(1, valid[0]), max_k):
+        if not np.all(osc_ok[k:k + hold]):
+            continue
+
+        rel_l = np.abs(amp_l[k:k + hold] - target_l) / target_l
+        if np.any(rel_l > tol):
+            continue
+
+        if c_d_centered is not None:
+            rel_d = np.abs(amp_d[k:k + hold] - target_d) / target_d
+            if np.any(rel_d > 0.25):
+                continue
+
+        return starts[k]
+
+    # Fallback: use first oscillatory window if stable-amplitude criterion is not met.
+    return starts[valid[0]]
+
+
+def plot_coeff_history(csv_path: str, save_name: Optional[str] = None) -> None:
+    """Plot drag and lift coefficients as functions of time."""
+    t, c_d, c_l = load_coeff_series(csv_path)
+    i_start = detect_oscillation_start_index(t, c_l, c_d)
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+    ax1.plot(t, c_d, color="tab:blue", linewidth=1.6)
+    ax1.set_ylabel("C_d")
+    ax1.set_title(f"Drag/Lift Coefficient History ({os.path.basename(csv_path)})",
+                  fontsize=12, fontweight="bold")
+    ax1.grid(True, alpha=0.3)
+
+    ax2.plot(t, c_l, color="tab:orange", linewidth=1.6)
+    ax2.set_xlabel("time")
+    ax2.set_ylabel("C_l")
+    ax2.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+
+    if save_name:
+        results_dir = ensure_results_dir()
+        save_path = os.path.join(results_dir, save_name)
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"Saved figure: {save_path}")
+    else:
+        plt.show()
+
+    # Also create oscillation-only view starting from the detected onset.
+    fig2, (ax3, ax4) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+    ax3.plot(t[i_start:], c_d[i_start:], color="tab:blue", linewidth=1.6)
+    ax3.set_ylabel("C_d")
+    ax3.set_title(
+        f"Drag/Lift Coefficients at Stable Oscillation Amplitude ({os.path.basename(csv_path)})",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax3.grid(True, alpha=0.3)
+
+    ax4.plot(t[i_start:], c_l[i_start:], color="tab:orange", linewidth=1.6)
+    ax4.set_xlabel("time")
+    ax4.set_ylabel("C_l")
+    ax4.grid(True, alpha=0.3)
+
+    fig2.tight_layout()
+
+    if save_name:
+        results_dir = ensure_results_dir()
+        osc_name = _derive_oscillation_save_name(save_name)
+        osc_path = os.path.join(results_dir, osc_name)
+        fig2.savefig(osc_path, dpi=150, bbox_inches="tight")
+        print(f"Saved figure: {osc_path}")
+    else:
+        plt.show()
 
 
 def inspect_npz(path: str):
@@ -130,23 +267,29 @@ def main(argv=None):
                         help="slice index for 3D arrays (nz dimension)")
     parser.add_argument("-c", "--comp", type=int,
                         help="component index for vector fields")
-    parser.add_argument("--cmap", default="viridis",
-                        help="matplotlib colormap")
-    parser.add_argument("--vmin", type=float, help="color scale vmin")
-    parser.add_argument("--vmax", type=float, help="color scale vmax")
     parser.add_argument(
         "--save", help="save plot to this path instead of showing")
-    parser.add_argument("--show-quiver", action="store_true",
-                        help="if data is a 2-component vector field, show quiver (subsampled)")
-    parser.add_argument("--streamlines", action="store_true",
-                        help="show streamlines instead of quiver arrows (for velocity fields)")
-    parser.add_argument("--add-pressure", action="store_true",
-                        help="overlay velocity vectors on pressure field")
-    parser.add_argument("--no-velocity-overlay", action="store_true",
-                        help="don't automatically overlay velocity on main plot")
-    parser.add_argument("--quiver-density", type=int, default=16,
-                        help="quiver arrow density (default: 16, smaller=denser)")
+    parser.add_argument("--plot-coeffs", action="store_true",
+                        help="plot drag/lift coefficients vs time from forces.csv or aero.csv")
+    parser.add_argument("--coeff-file", type=str,
+                        help="path to coefficient CSV (default: auto from output/)")
+    parser.add_argument("--coeff-indir", type=str, default="output",
+                        help="directory searched for forces.csv/aero.csv (default: output)")
     args = parser.parse_args(argv)
+
+    if args.plot_coeffs:
+        coeff_path = args.coeff_file or find_coeff_series_file(
+            args.coeff_indir)
+        if coeff_path is None:
+            print("Could not find coefficient CSV. Expected forces.csv or aero.csv.",
+                  file=sys.stderr)
+            sys.exit(7)
+        try:
+            plot_coeff_history(coeff_path, args.save)
+        except Exception as e:
+            print(f"Error plotting coefficients: {e}", file=sys.stderr)
+            sys.exit(8)
+        return
 
     if args.file is None:
         latest = find_latest_snapshot()
@@ -177,9 +320,6 @@ def main(argv=None):
             sys.exit(4)
         arr = np.array(data[key])
 
-        # Try to extract velocity for overlay
-        vel_data = extract_velocity_field(data)
-
     # Extract main variable to plot
     try:
         img = pick_slice_and_component(arr, args.slice, args.comp)
@@ -190,8 +330,7 @@ def main(argv=None):
 
     # Plot
     fig, ax = plt.subplots(figsize=(8, 6))
-    im = ax.imshow(img, origin="lower", cmap=args.cmap,
-                   vmin=args.vmin, vmax=args.vmax)
+    im = ax.imshow(img, origin="lower", cmap="viridis")
     ax.set_title(f"{os.path.basename(args.file)} : {key}",
                  fontsize=12, fontweight='bold')
     fig.colorbar(im, ax=ax, label=key)
@@ -200,8 +339,8 @@ def main(argv=None):
     ax.set_ylabel('y', fontsize=10)
 
     if args.save:
-        images_dir = ensure_images_dir()
-        save_path = os.path.join(images_dir, args.save)
+        results_dir = ensure_results_dir()
+        save_path = os.path.join(results_dir, args.save)
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"Saved figure: {save_path}")
     else:

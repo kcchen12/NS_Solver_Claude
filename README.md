@@ -10,7 +10,7 @@ The solver uses the following methods and has the following capabilities:
 2. **Finite Volume Method** - 2D spatial discretization on a staggered Cartesian grid
 3. **Time Integration** - 3rd Order Strong Stability Preserving Runge-Kutta (SSP-RK3)
 4. **Pressure-Velocity Coupling** - Fractional-step (projection) method
-5. **Boundary Conditions** - Inflow, convective outflow, no-slip walls, and far-field conditions
+5. **Boundary Conditions** - Configurable per-face inflow/farfield/outflow/wall/periodic, with selectable wall slip/penetration and outflow mode
 6. **Immersed Boundary Method (IBM)** - Support for arbitrary geometries (e.g., cylinders)
 7. **Extensible to 3D** - Core algorithms support extension to 3D
 
@@ -82,7 +82,7 @@ All arguments are optional and override values in `config.txt`:
 
 ## Configuration
 
-Configuration is specified in `config.txt`. See `config_example_quick.txt` and `config_example_highres.txt` for complete examples.
+Configuration is specified in `config.txt`. See `config_example.txt` for a complete example.
 
 ### Grid Parameters
 - **nx** - Number of grid cells in x direction (default: 64)
@@ -94,6 +94,15 @@ Configuration is specified in `config.txt`. See `config_example_quick.txt` and `
 
 ### Physics Parameters
 - **re** - Reynolds number ($Re = \frac{U_\infty L}{\nu}$). Higher values = less viscous flow (default: 100.0)
+
+### Boundary Conditions
+- **bc_left, bc_right, bc_bottom, bc_top** - Boundary type per face: `inflow`, `farfield`, `outflow`, `wall`, or `periodic`
+- **inflow_u, inflow_v, inflow_w** - Velocity components used for inflow/farfield boundaries
+- **wall_slip_mode** - Wall tangential behavior: `no-slip` or `free-slip`
+- **wall_penetration** - Enable/disable wall-normal penetration at wall boundaries (`true` or `false`)
+- **wall_normal_velocity** - Wall-normal velocity value used when `wall_penetration = true`
+- **outflow_mode** - Outflow update model: `convective` or `zero-gradient`
+- **outflow_speed** - Convective wave speed used by outflow boundaries in `convective` mode
 
 ### Time Integration
 - **t_end** - Simulation end time (default: 5.0)
@@ -151,11 +160,8 @@ python view_snapshot_viewer.py --list
 # Plot pressure field from latest snapshot
 python view_snapshot_viewer.py -k p --save pressure.png
 
-# Plot velocity field with quiver arrows
-python view_snapshot_viewer.py -k u --show-quiver --save velocity.png
-
-# Plot with velocity streamlines
-python view_snapshot_viewer.py -k p --streamlines --save pressure_streamlines.png
+# Plot drag/lift coefficient histories
+python view_snapshot_viewer.py --plot-coeffs --save coeff_history.png
 
 # Plot from a specific snapshot file
 python view_snapshot_viewer.py output/snap_005.0000.npz -k p --save plot.png
@@ -163,17 +169,17 @@ python view_snapshot_viewer.py output/snap_005.0000.npz -k p --save plot.png
 
 ### Image Output
 
-By default, plots are automatically saved to the `images/` directory in PNG format at 150 DPI.
+By default, plots are automatically saved to the `results/` directory in PNG format at 150 DPI.
 
 ### Viewer Options
 ```
 -k, --key KEY              Variable to plot (u, v, p, etc.)
 -s, --slice IDX            Slice index for 3D arrays
 -c, --comp IDX             Component index for vector fields
---show-quiver              Overlay velocity vectors as arrows
---streamlines              Overlay velocity as streamlines
---cmap COLORMAP            Matplotlib colormap (default: viridis)
---save FILE                Save plot to file (saves to images/ folder)
+--plot-coeffs              Plot drag/lift coefficient histories
+--coeff-file FILE.csv      Coefficient CSV path (forces.csv/aero.csv)
+--coeff-indir DIR          Directory searched for coefficient CSVs (default: output)
+--save FILE                Save plot to file (saves to results/ folder)
 ```
 
 ## Strouhal Number Evaluation
@@ -197,7 +203,7 @@ python evaluate_strouhal.py --probe-x 1.5 --probe-y 1.1 --use-cylinder-diameter 
 To also save a plain-text summary report (including Combined Strouhal):
 
 ```bash
-python evaluate_strouhal.py --probe-x 1.5 --probe-y 1.1 --use-cylinder-diameter --t-min 1.0 --save-report output/strouhal_report.txt
+python evaluate_strouhal.py --probe-x 1.5 --probe-y 1.1 --use-cylinder-diameter --t-min 1.0 --save-report results/strouhal_report.txt
 ```
 
 ### Strouhal Script Options
