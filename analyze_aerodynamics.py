@@ -68,6 +68,14 @@ class CylinderGeometry:
     radius: float
 
 
+@dataclass(frozen=True)
+class SurfaceForcePlan:
+    normals_x: np.ndarray
+    normals_y: np.ndarray
+    arc_length: float
+    bilinear_plans: Tuple[BilinearPlan, ...]
+
+
 def _time_from_filename(path: str) -> Optional[float]:
     """Extract snapshot time from filename pattern snap_<time>.npz."""
     name = os.path.basename(path)
@@ -271,6 +279,11 @@ def _extract_probe_series(
     snapshots_list = list(snapshots)
     n = len(snapshots_list)
 
+    if probe_x is None or probe_y is None:
+        times = np.array([t for t, _ in snapshots_list], dtype=float)
+        nan_vals = np.full(n, np.nan, dtype=float)
+        return times, nan_vals.copy(), nan_vals.copy(), nan_vals.copy()
+
     xf = np.linspace(0.0, lx, nx + 1)
     xc = 0.5 * (xf[:-1] + xf[1:])
     yf = np.linspace(0.0, ly, ny + 1)
@@ -339,66 +352,61 @@ def _is_edge_frequency(f: float, f_min: float, f_max: float) -> bool:
     return (f - f_min) <= tol or (f_max - f) <= tol
 
 
-def _compute_pressure_forces(
-    p: np.ndarray,
+def _build_surface_force_plan(
     xc: np.ndarray,
     yc: np.ndarray,
     geom: CylinderGeometry,
-    nx: int,
-    ny: int,
+    n_samples: int = 720,
+) -> SurfaceForcePlan:
+    """Precompute interpolation plans for a line integral on the cylinder surface."""
+    theta = np.linspace(0.0, 2.0 * np.pi, n_samples, endpoint=False)
+    x_surf = geom.center_x + geom.radius * np.cos(theta)
+    y_surf = geom.center_y + geom.radius * np.sin(theta)
+    plans = tuple(
+        _build_bilinear_plan(xc, yc, float(x), float(y))
+        for x, y in zip(x_surf, y_surf)
+    )
+    return SurfaceForcePlan(
+        normals_x=np.cos(theta),
+        normals_y=np.sin(theta),
+        arc_length=2.0 * np.pi * geom.radius / float(n_samples),
+        bilinear_plans=plans,
+    )
+
+
+def _compute_pressure_forces(
+    p: np.ndarray,
+    force_plan: SurfaceForcePlan,
 ) -> Tuple[float, float]:
-    """Compute pressure forces on cylinder surface."""
-    dx = xc[1] - xc[0] if len(xc) > 1 else 1.0
-    dy = yc[1] - yc[0] if len(yc) > 1 else 1.0
+    """Compute pressure forces on the cylinder via a contour integral."""
+    pressure_samples = np.array(
+        [_apply_bilinear_plan(p, plan) for plan in force_plan.bilinear_plans],
+        dtype=float,
+    )
+    pressure_samples -= np.mean(pressure_samples)
 
-    f_x = 0.0
-    f_y = 0.0
-
-    for i in range(nx):
-        for j in range(ny):
-            xi = xc[i]
-            yi = yc[j]
-
-            dx_to_center = xi - geom.center_x
-            dy_to_center = yi - geom.center_y
-            r_cell = np.sqrt(dx_to_center**2 + dy_to_center**2)
-
-            if abs(r_cell - geom.radius) <= 1.5 * max(dx, dy):
-                pi = p[i, j]
-
-                if r_cell > 0:
-                    nx_normal = dx_to_center / r_cell
-                    ny_normal = dy_to_center / r_cell
-                else:
-                    continue
-
-                dA = dx * dy
-                f_x += pi * nx_normal * dA
-                f_y += pi * ny_normal * dA
-
-    return f_x, f_y
+    # Force on the body is - integral(p * n ds) over the body surface.
+    f_x = -force_plan.arc_length * np.sum(
+        pressure_samples * force_plan.normals_x
+    )
+    f_y = -force_plan.arc_length * np.sum(
+        pressure_samples * force_plan.normals_y
+    )
+    return float(f_x), float(f_y)
 
 
 def _compute_forces(
     snapshot_path: str,
-    geom: CylinderGeometry,
-    nx: int,
-    ny: int,
-    lx: float,
-    ly: float,
+    force_plan: SurfaceForcePlan,
 ) -> Tuple[float, float]:
     """Compute x and y forces from a single snapshot."""
     with np.load(snapshot_path) as data:
+        fx_meta = _safe_scalar(data, "meta_ibm_force_x")
+        fy_meta = _safe_scalar(data, "meta_ibm_force_y")
+        if fx_meta is not None and fy_meta is not None:
+            return float(fx_meta), float(fy_meta)
         p = data["p"]
-
-    xc = np.linspace(0.0, lx, nx + 1)
-    xc = 0.5 * (xc[:-1] + xc[1:])
-    yc = np.linspace(0.0, ly, ny + 1)
-    yc = 0.5 * (yc[:-1] + yc[1:])
-
-    f_x, f_y = _compute_pressure_forces(p, xc, yc, geom, nx, ny)
-
-    return f_x, f_y
+    return _compute_pressure_forces(p, force_plan)
 
 
 def _compute_coefficients(
@@ -440,6 +448,11 @@ def _extract_combined_series(
     t, u_probe, v_probe, p_probe = _extract_probe_series(
         snapshots, nx, ny, lx, ly, probe_x, probe_y
     )
+    xf = np.linspace(0.0, lx, nx + 1)
+    xc = 0.5 * (xf[:-1] + xf[1:])
+    yf = np.linspace(0.0, ly, ny + 1)
+    yc = 0.5 * (yf[:-1] + yf[1:])
+    force_plan = _build_surface_force_plan(xc, yc, geom)
 
     n = len(snapshots)
     f_x_arr = np.empty(n, dtype=float)
@@ -448,7 +461,7 @@ def _extract_combined_series(
     c_l_arr = np.empty(n, dtype=float)
 
     for k, (_, path) in enumerate(snapshots):
-        f_x, f_y = _compute_forces(path, geom, nx, ny, lx, ly)
+        f_x, f_y = _compute_forces(path, force_plan)
         c_d, c_l = _compute_coefficients(f_x, f_y, u_ref, char_length)
         f_x_arr[k] = f_x
         f_y_arr[k] = f_y
@@ -469,10 +482,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=str, default="config.txt",
                         help="Configuration file (default: config.txt)")
 
-    parser.add_argument("--probe-x", type=float, required=True,
-                        help="Probe x coordinate in physical units")
-    parser.add_argument("--probe-y", type=float, required=True,
-                        help="Probe y coordinate in physical units")
+    parser.add_argument("--probe-x", type=float, default=None,
+                        help="Optional probe x coordinate in physical units")
+    parser.add_argument("--probe-y", type=float, default=None,
+                        help="Optional probe y coordinate in physical units")
 
     parser.add_argument("--u-ref", type=float, default=1.0,
                         help="Reference velocity U (default: 1.0)")
@@ -550,46 +563,28 @@ def main() -> int:
                    header=header, comments="")
         print(f"Saved combined series: {args.save_series}")
 
-    # Compute Strouhal metrics
+    # Compute Strouhal from lift coefficient history.
     dt = np.diff(t)
     dt_median = float(np.median(dt)) if dt.size else np.nan
     nyquist_est = 0.5 / \
         dt_median if np.isfinite(dt_median) and dt_median > 0 else np.nan
 
-    strouhal_results: Dict[str, Optional[SpectralResult]] = {}
-    for name, sig in (("u", u_probe), ("v", v_probe), ("p", p_probe)):
-        out = _dominant_frequency(
-            t,
-            sig,
-            t_min=args.t_min,
-            f_min=args.f_min,
-            f_max=args.f_max,
-            n_freq=args.n_freq,
-        )
-        if out is None:
-            strouhal_results[name] = None
-            continue
+    lift_strouhal: Optional[SpectralResult] = None
+    out = _dominant_frequency(
+        t,
+        c_l,
+        t_min=args.t_min,
+        f_min=args.f_min,
+        f_max=args.f_max,
+        n_freq=args.n_freq,
+    )
+    if out is not None:
         f_peak, peak_power = out
-        strouhal_results[name] = SpectralResult(
+        lift_strouhal = SpectralResult(
             freq=f_peak,
             peak_power=peak_power,
             st=f_peak * l_char / u_ref,
         )
-
-    # Combined Strouhal estimate
-    f_candidates: List[float] = []
-    if strouhal_results["v"] is not None and not _is_edge_frequency(strouhal_results["v"].freq, args.f_min, args.f_max):
-        f_candidates.append(strouhal_results["v"].freq)
-    if strouhal_results["u"] is not None and not _is_edge_frequency(strouhal_results["u"].freq, args.f_min, args.f_max):
-        f_candidates.append(0.5 * strouhal_results["u"].freq)
-    if strouhal_results["p"] is not None and not _is_edge_frequency(strouhal_results["p"].freq, args.f_min, args.f_max):
-        f_candidates.append(0.5 * strouhal_results["p"].freq)
-
-    combined_f0: Optional[float] = None
-    combined_st: Optional[float] = None
-    if f_candidates:
-        combined_f0 = float(np.median(np.array(f_candidates)))
-        combined_st = combined_f0 * l_char / u_ref
 
     # Force statistics
     c_d_mean = float(np.mean(c_d))
@@ -604,7 +599,8 @@ def main() -> int:
     print("=" * 70)
     print(f"Snapshots         : {len(snapshots)}")
     print(f"Time span         : [{t.min():.4f}, {t.max():.4f}]")
-    print(f"Probe location    : ({args.probe_x:.6g}, {args.probe_y:.6g})")
+    if args.probe_x is not None and args.probe_y is not None:
+        print(f"Probe location    : ({args.probe_x:.6g}, {args.probe_y:.6g})")
     print(f"Cylinder center   : ({geom.center_x:.6g}, {geom.center_y:.6g})")
     print(f"Cylinder radius   : {geom.radius:.6g}")
     print(f"Char. length (L)  : {l_char:.6g}")
@@ -613,28 +609,28 @@ def main() -> int:
     print("-" * 70)
     print("STROUHAL NUMBER ANALYSIS")
     print("-" * 70)
+    print("Signal used       : C_l")
     print(f"Frequency window  : [{args.f_min:.4f}, {args.f_max:.4f}]")
     if np.isfinite(nyquist_est):
         print(
             f"Median dt         : {dt_median:.6g} (Nyquist approx {nyquist_est:.6g})")
 
-    for key in ("u", "v", "p"):
-        res = strouhal_results[key]
-        if res is None:
-            print(
-                f"{key} peak         : unavailable (insufficient variation/samples)")
-        else:
-            print(
-                f"{key} peak         : f={res.freq:.6g}, St={res.st:.6g}, "
-                f"power={res.peak_power:.6g}"
-            )
-
-    if combined_f0 is not None and combined_st is not None:
+    if lift_strouhal is None:
+        print("C_l peak         : unavailable (insufficient variation/samples)")
+    else:
+        edge_note = ""
+        if _is_edge_frequency(lift_strouhal.freq, args.f_min, args.f_max):
+            edge_note = " [edge]"
+        print(
+            f"C_l peak         : f={lift_strouhal.freq:.6g}, "
+            f"St={lift_strouhal.st:.6g}, "
+            f"power={lift_strouhal.peak_power:.6g}{edge_note}"
+        )
         print("-" * 70)
-        print(f"Combined f0        : {combined_f0:.6g}")
-        print(f"Combined Strouhal  : {combined_st:.6g}")
+        print(f"Lift f0           : {lift_strouhal.freq:.6g}")
+        print(f"Lift Strouhal     : {lift_strouhal.st:.6g}")
 
-        if np.isfinite(nyquist_est) and combined_f0 > 0.8 * nyquist_est:
+        if np.isfinite(nyquist_est) and lift_strouhal.freq > 0.8 * nyquist_est:
             print("WARNING: Estimated f0 is close to Nyquist limit.")
             print("         Use smaller save_dt for confidence.")
 
@@ -659,7 +655,6 @@ def main() -> int:
             "=" * 70,
             f"Snapshots         : {len(snapshots)}",
             f"Time span         : [{t.min():.4f}, {t.max():.4f}]",
-            f"Probe location    : ({args.probe_x:.6g}, {args.probe_y:.6g})",
             f"Cylinder center   : ({geom.center_x:.6g}, {geom.center_y:.6g})",
             f"Cylinder radius   : {geom.radius:.6g}",
             f"Char. length (L)  : {l_char:.6g}",
@@ -668,8 +663,15 @@ def main() -> int:
             "-" * 70,
             "STROUHAL NUMBER ANALYSIS",
             "-" * 70,
+            "Signal used       : C_l",
             f"Frequency window  : [{args.f_min:.4f}, {args.f_max:.4f}]",
         ]
+
+        if args.probe_x is not None and args.probe_y is not None:
+            lines.insert(
+                4,
+                f"Probe location    : ({args.probe_x:.6g}, {args.probe_y:.6g})",
+            )
 
         if np.isfinite(nyquist_est):
             lines.append(
@@ -677,23 +679,22 @@ def main() -> int:
                 f"(Nyquist approx {nyquist_est:.6g})"
             )
 
-        for key in ("u", "v", "p"):
-            res = strouhal_results[key]
-            if res is None:
-                lines.append(
-                    f"{key} peak         : unavailable "
-                    "(insufficient variation/samples)"
-                )
-            else:
-                lines.append(
-                    f"{key} peak         : f={res.freq:.6g}, St={res.st:.6g}, "
-                    f"power={res.peak_power:.6g}"
-                )
-
-        if combined_f0 is not None and combined_st is not None:
+        if lift_strouhal is None:
+            lines.append(
+                "C_l peak         : unavailable (insufficient variation/samples)"
+            )
+        else:
+            edge_note = ""
+            if _is_edge_frequency(lift_strouhal.freq, args.f_min, args.f_max):
+                edge_note = " [edge]"
+            lines.append(
+                f"C_l peak         : f={lift_strouhal.freq:.6g}, "
+                f"St={lift_strouhal.st:.6g}, "
+                f"power={lift_strouhal.peak_power:.6g}{edge_note}"
+            )
             lines.append("")
-            lines.append(f"Combined f0        : {combined_f0:.6g}")
-            lines.append(f"Combined Strouhal  : {combined_st:.6g}")
+            lines.append(f"Lift f0           : {lift_strouhal.freq:.6g}")
+            lines.append(f"Lift Strouhal     : {lift_strouhal.st:.6g}")
 
         lines.extend([
             "",

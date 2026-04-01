@@ -78,6 +78,8 @@ class FractionalStepSolver:
         self.v = grid.zeros_v()
         self.p = grid.zeros_p()
         self.t = 0.0
+        self.last_ibm_force_x = 0.0
+        self.last_ibm_force_y = 0.0
 
     # ------------------------------------------------------------------
     # Initialisation helpers
@@ -92,6 +94,8 @@ class FractionalStepSolver:
         # Enforce BCs on initial state
         apply_velocity_bc(self.u, self.v, self.grid, self.bc)
         self.t = 0.0
+        self.last_ibm_force_x = 0.0
+        self.last_ibm_force_y = 0.0
 
     # ------------------------------------------------------------------
     # Single time-step advance
@@ -106,6 +110,8 @@ class FractionalStepSolver:
         grid = self.grid
         bc = self.bc
         nu = self.nu
+        self.last_ibm_force_x = 0.0
+        self.last_ibm_force_y = 0.0
 
         # ----------------------------------------------------------------
         # Step 1 — SSP-RK3 for convection-diffusion (no pressure)
@@ -124,7 +130,9 @@ class FractionalStepSolver:
         # Apply BCs and IBM to the intermediate velocity
         apply_velocity_bc(u_star, v_star, grid, bc, dt=dt)
         if self.ibm is not None and self.ibm.has_solid:
-            self.ibm.apply(u_star, v_star)
+            self.last_ibm_force_x, self.last_ibm_force_y = self.ibm.apply(
+                u_star, v_star, dt=dt
+            )
 
         # ----------------------------------------------------------------
         # Step 2 — Solve pressure Poisson:  ∇²φ = ∇·u* / dt

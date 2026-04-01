@@ -119,7 +119,8 @@ class ImmersedBoundary:
     # ------------------------------------------------------------------
 
     def apply(self, u: np.ndarray, v: np.ndarray,
-              u_body: float = 0.0, v_body: float = 0.0) -> None:
+              u_body: float = 0.0, v_body: float = 0.0,
+              dt: float = None, rho: float = 1.0):
         """
         Apply direct forcing **in-place**: set solid-face velocities to the
         prescribed body velocity (default: 0 for stationary body).
@@ -127,8 +128,18 @@ class ImmersedBoundary:
         Call this *after* computing the intermediate velocity u* and
         *before* the pressure-correction step.
         """
+        force_x = 0.0
+        force_y = 0.0
+        if dt is not None and dt > 0.0:
+            face_area = self.grid.dx * self.grid.dy
+            force_x = rho * face_area * \
+                float(np.sum(u[self.mask_u] - u_body)) / dt
+            force_y = rho * face_area * \
+                float(np.sum(v[self.mask_v] - v_body)) / dt
+
         u[self.mask_u] = u_body
         v[self.mask_v] = v_body
+        return force_x, force_y
 
     @property
     def has_solid(self) -> bool:

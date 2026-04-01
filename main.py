@@ -285,7 +285,9 @@ def run(args):
                 snap_path = os.path.join(
                     args.outdir, f"snap_{solver.t:08.4f}.npz")
                 meta = dict(t=solver.t, nx=args.nx, ny=args.ny,
-                            lx=args.lx, ly=args.ly, re=args.re)
+                            lx=args.lx, ly=args.ly, re=args.re,
+                            ibm_force_x=solver.last_ibm_force_x,
+                            ibm_force_y=solver.last_ibm_force_y)
                 save_snapshot(snap_path, solver.u, solver.v, solver.p,
                               solver.t, meta=meta, fmt="numpy")
             t_save_next += args.save_dt

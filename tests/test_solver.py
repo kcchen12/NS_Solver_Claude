@@ -118,6 +118,22 @@ class TestIBMForcing:
         assert np.allclose(solver.u[ibm.mask_u], 0.0, atol=1e-12)
         assert np.allclose(solver.v[ibm.mask_v], 0.0, atol=1e-12)
 
+    def test_ibm_force_diagnostic_is_finite(self):
+        """IBM body-force diagnostic should be recorded after a step."""
+        g = CartesianGrid(20, 12, lx=2.0, ly=1.0)
+        bc = channel_bc()
+        ibm = ImmersedBoundary(g)
+        ibm.add_circle(cx=0.5, cy=0.5, radius=0.1)
+
+        solver = FractionalStepSolver(g, bc, nu=0.01, ibm=ibm)
+        solver.init_fields(u0=1.0)
+
+        dt = solver.suggest_dt(cfl_target=0.3)
+        solver.step(dt)
+
+        assert np.isfinite(solver.last_ibm_force_x)
+        assert np.isfinite(solver.last_ibm_force_y)
+
 
 # ---------------------------------------------------------------------------
 # Suggest dt

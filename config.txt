@@ -11,18 +11,18 @@ lx = 4.0
 ly = 2.0
 
 # Physics parameters
-re = 200.0
+re = 100.0
 
 # Boundary conditions
 # Face types: inflow | farfield | outflow | wall | periodic
 bc_left = inflow
 bc_right = outflow
-bc_bottom = wall
-bc_top = wall
+bc_bottom = farfield
+bc_top = farfield
 
 # Inflow/farfield velocity components
 inflow_u = 1.0
-inflow_v = 0.0
+inflow_v = 0.001
 inflow_w = 0.0
 
 # Wall behavior (used where face type is 'wall')
@@ -38,11 +38,11 @@ outflow_mode = convective
 outflow_speed = 1.0
 
 # Time integration
-t_end = 100.0
-cfl = 0.5
+t_end = 100
+cfl = .5
 
 # I/O parameters
-save_dt = 0.05
+save_dt = 0.25
 outdir = output
 
 # Features (true/false)
