@@ -1,7 +1,7 @@
 .venv/
 .pytest_cache/
 output/
-results/comparison_reports/
+results/
 **/__pycache__/
 *.pyc
 NS_Solver/
