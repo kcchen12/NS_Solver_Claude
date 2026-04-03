@@ -323,15 +323,25 @@ def _plot_results(solver, grid, args):
     u_c = 0.5 * (solver.u[:-1, :] + solver.u[1:, :])
     v_c = 0.5 * (solver.v[:, :-1] + solver.v[:, 1:])
     speed = np.sqrt(u_c**2 + v_c**2)
+    # 2-D scalar vorticity: omega_z = dv/dx - du/dy
+    edge_x = 2 if grid.nx >= 3 else 1
+    edge_y = 2 if grid.ny >= 3 else 1
+    dv_dx = np.gradient(v_c, grid.xc, axis=0, edge_order=edge_x)
+    du_dy = np.gradient(u_c, grid.yc, axis=1, edge_order=edge_y)
+    omega = dv_dx - du_dy
 
     X, Y = np.meshgrid(grid.xc, grid.yc, indexing="ij")
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 
-    # Speed
-    im0 = axes[0].contourf(X, Y, speed, 50, cmap="viridis")
+    # Vorticity
+    wmax = float(np.max(np.abs(omega)))
+    wmax = max(wmax, 1e-8)
+    levels = np.linspace(-wmax, wmax, 61)
+    im0 = axes[0].contourf(X, Y, omega, levels=levels,
+                           cmap="RdBu_r", extend="both")
     fig.colorbar(im0, ax=axes[0])
-    axes[0].set_title("Speed |u|")
+    axes[0].set_title(r"Vorticity $\omega_z$")
     axes[0].set_xlabel("x")
     axes[0].set_ylabel("y")
     axes[0].set_aspect("equal")
