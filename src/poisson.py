@@ -56,7 +56,6 @@ def build_poisson_matrix(grid: CartesianGrid,
         True where b must be overridden to 0 (Dirichlet BC).
     """
     nx, ny = grid.nx, grid.ny
-    dx, dy = grid.dx, grid.dy
     N = nx * ny
 
     rows, cols, vals = [], [], []
@@ -67,18 +66,15 @@ def build_poisson_matrix(grid: CartesianGrid,
         cols.append(c)
         vals.append(v)
 
-    ax = 1.0 / dx**2
-    ay = 1.0 / dy**2
-
     for j in range(ny):
         for i in range(nx):
             idx = _cell_index(i, j, nx)
 
             # ---- determine which faces are Dirichlet (outflow) ----
-            dirich_left   = (i == 0)      and (bc.left   == BCType.OUTFLOW)
-            dirich_right  = (i == nx - 1) and (bc.right  == BCType.OUTFLOW)
-            dirich_bottom = (j == 0)      and (bc.bottom == BCType.OUTFLOW)
-            dirich_top    = (j == ny - 1) and (bc.top    == BCType.OUTFLOW)
+            dirich_left = (i == 0) and (bc.left == BCType.OUTFLOW)
+            dirich_right = (i == nx - 1) and (bc.right == BCType.OUTFLOW)
+            dirich_bottom = (j == 0) and (bc.bottom == BCType.OUTFLOW)
+            dirich_top = (j == ny - 1) and (bc.top == BCType.OUTFLOW)
 
             if dirich_left or dirich_right or dirich_bottom or dirich_top:
                 # Dirichlet cell: φ = 0  →  1·φ[idx] = 0
@@ -87,22 +83,27 @@ def build_poisson_matrix(grid: CartesianGrid,
                 continue
 
             diag = 0.0
+            dx_cell = grid.dx_f[i]
+            dy_cell = grid.dy_f[j]
 
             # ---- x-direction neighbours ----
             if i > 0:
                 left_dirich = (i - 1 == 0) and (bc.left == BCType.OUTFLOW)
+                a_w = 1.0 / (grid.dx_c[i - 1] * dx_cell)
                 if not left_dirich:
-                    add(idx, _cell_index(i - 1, j, nx), ax)
-                diag -= ax
+                    add(idx, _cell_index(i - 1, j, nx), a_w)
+                diag -= a_w
             else:
                 # Left boundary face: Neumann → ghost = interior
                 pass  # results in diag = -ax (one-sided stencil)
 
             if i < nx - 1:
-                right_dirich = (i + 1 == nx - 1) and (bc.right == BCType.OUTFLOW)
+                right_dirich = (
+                    i + 1 == nx - 1) and (bc.right == BCType.OUTFLOW)
+                a_e = 1.0 / (grid.dx_c[i] * dx_cell)
                 if not right_dirich:
-                    add(idx, _cell_index(i + 1, j, nx), ax)
-                diag -= ax
+                    add(idx, _cell_index(i + 1, j, nx), a_e)
+                diag -= a_e
             else:
                 # Right boundary: Neumann
                 pass
@@ -110,17 +111,19 @@ def build_poisson_matrix(grid: CartesianGrid,
             # ---- y-direction neighbours ----
             if j > 0:
                 bot_dirich = (j - 1 == 0) and (bc.bottom == BCType.OUTFLOW)
+                a_s = 1.0 / (grid.dy_c[j - 1] * dy_cell)
                 if not bot_dirich:
-                    add(idx, _cell_index(i, j - 1, nx), ay)
-                diag -= ay
+                    add(idx, _cell_index(i, j - 1, nx), a_s)
+                diag -= a_s
             else:
                 pass  # Neumann at bottom
 
             if j < ny - 1:
                 top_dirich = (j + 1 == ny - 1) and (bc.top == BCType.OUTFLOW)
+                a_n = 1.0 / (grid.dy_c[j] * dy_cell)
                 if not top_dirich:
-                    add(idx, _cell_index(i, j + 1, nx), ay)
-                diag -= ay
+                    add(idx, _cell_index(i, j + 1, nx), a_n)
+                diag -= a_n
             else:
                 pass  # Neumann at top
 
@@ -187,7 +190,7 @@ class PoissonSolver:
 
     def __init__(self, grid: CartesianGrid, bc: BoundaryConfig):
         self.grid = grid
-        self.bc   = bc
+        self.bc = bc
         self._A, self._dirich_mask = build_poisson_matrix(grid, bc)
 
         # Regularise for purely Neumann systems (no outflow Dirichlet BC)
@@ -205,7 +208,8 @@ class PoissonSolver:
     def solve(self, rhs: np.ndarray) -> np.ndarray:
         """Solve ∇²φ = rhs, returning φ of shape (nx, ny)."""
         nx, ny = self.grid.nx, self.grid.ny
-        b = rhs.ravel(order='F').copy()   # Fortran order: flat[i+j*nx] = rhs[i,j]
+        # Fortran order: flat[i+j*nx] = rhs[i,j]
+        b = rhs.ravel(order='F').copy()
         # Zero Dirichlet entries and regularisation pin
         b[self._dirich_mask] = 0.0
         if self._regularised:

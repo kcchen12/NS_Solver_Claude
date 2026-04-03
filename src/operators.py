@@ -26,6 +26,24 @@ from src.grid import CartesianGrid
 from src.boundary import BoundaryConfig, BCType
 
 
+def _edge_order(coords: np.ndarray) -> int:
+    return 2 if coords.size >= 3 else 1
+
+
+def _first_derivative(arr: np.ndarray, coords: np.ndarray, axis: int) -> np.ndarray:
+    return np.gradient(arr, coords, axis=axis, edge_order=_edge_order(coords))
+
+
+def _second_derivative(arr: np.ndarray, coords: np.ndarray, axis: int) -> np.ndarray:
+    d1 = _first_derivative(arr, coords, axis=axis)
+    return np.gradient(d1, coords, axis=axis, edge_order=_edge_order(coords))
+
+
+def _three_point_second(fm: np.ndarray, f0: np.ndarray, fp: np.ndarray,
+                        hm: np.ndarray, hp: np.ndarray) -> np.ndarray:
+    return 2.0 * ((fp - f0) / hp - (f0 - fm) / hm) / (hp + hm)
+
+
 # ---------------------------------------------------------------------------
 # Ghost-cell helpers (tangential BCs for Laplacian)
 # ---------------------------------------------------------------------------
@@ -83,9 +101,10 @@ def divergence(u: np.ndarray, v: np.ndarray,
 
     Returns array of shape (nx, ny).
     """
-    dx, dy = grid.dx, grid.dy
-    # u[i+1, j] - u[i, j] for i=0..nx-1
-    div = (u[1:, :] - u[:-1, :]) / dx + (v[:, 1:] - v[:, :-1]) / dy
+    div = (
+        (u[1:, :] - u[:-1, :]) / grid.dx_f[:, None]
+        + (v[:, 1:] - v[:, :-1]) / grid.dy_f[None, :]
+    )
     return div
 
 
@@ -99,7 +118,7 @@ def grad_p_x(p: np.ndarray, grid: CartesianGrid) -> np.ndarray:
 
     Returns shape (nx-1, ny)  (faces i=1..nx-1).
     """
-    return (p[1:, :] - p[:-1, :]) / grid.dx
+    return (p[1:, :] - p[:-1, :]) / grid.dx_c[:, None]
 
 
 def grad_p_y(p: np.ndarray, grid: CartesianGrid) -> np.ndarray:
@@ -108,7 +127,7 @@ def grad_p_y(p: np.ndarray, grid: CartesianGrid) -> np.ndarray:
 
     Returns shape (nx, ny-1)  (faces j=1..ny-1).
     """
-    return (p[:, 1:] - p[:, :-1]) / grid.dy
+    return (p[:, 1:] - p[:, :-1]) / grid.dy_c[None, :]
 
 
 # ---------------------------------------------------------------------------
@@ -122,28 +141,34 @@ def laplacian_u(u: np.ndarray, grid: CartesianGrid,
 
     Returns shape (nx-1, ny).
     """
-    dx, dy = grid.dx, grid.dy
+    u_0 = u[1:-1, :]
 
-    # x-direction: d²u/dx²
-    # Interior in x: i=1..nx-1 → use u[i-1], u[i], u[i+1]
-    u_xm = u[:-2, :]   # u[i-1, j]
-    u_xp = u[2:, :]   # u[i+1, j]
-    u_0 = u[1:-1, :]  # u[i,   j]
-    d2u_dx2 = (u_xp - 2.0 * u_0 + u_xm) / dx**2
+    # x-direction at interior u-faces using local face spacing.
+    hm_x = grid.dx_f[:-1][:, None]
+    hp_x = grid.dx_f[1:][:, None]
+    d2u_dx2 = _three_point_second(u[:-2, :], u_0, u[2:, :], hm_x, hp_x)
 
-    # y-direction: d²u/dy²
-    # Need ghost rows at j=-1 and j=ny
-    u_ghost_bot = _u_ghost_bottom(u[1:-1, :], bc)   # shape (nx-1,)
-    u_ghost_top = _u_ghost_top(u[1:-1, :], bc, grid)
+    # y-direction with ghost rows for tangential-wall handling.
+    u_ghost_bot = _u_ghost_bottom(u_0, bc)
+    u_ghost_top = _u_ghost_top(u_0, bc, grid)
 
     u_ym = np.empty_like(u_0)
     u_yp = np.empty_like(u_0)
-    u_ym[:, 1:] = u_0[:, :-1]    # u[i, j-1] for j>=1
-    u_ym[:, 0] = u_ghost_bot    # ghost at j=-1
-    u_yp[:, :-1] = u_0[:, 1:]     # u[i, j+1] for j<=ny-2
-    u_yp[:, -1] = u_ghost_top    # ghost at j=ny
+    u_ym[:, 1:] = u_0[:, :-1]
+    u_ym[:, 0] = u_ghost_bot
+    u_yp[:, :-1] = u_0[:, 1:]
+    u_yp[:, -1] = u_ghost_top
 
-    d2u_dy2 = (u_yp - 2.0 * u_0 + u_ym) / dy**2
+    hm_y = np.empty(grid.ny)
+    hp_y = np.empty(grid.ny)
+    hm_y[0] = grid.dy_f[0]
+    hp_y[-1] = grid.dy_f[-1]
+    if grid.ny > 1:
+        hp_y[:-1] = grid.dy_c
+        hm_y[1:] = grid.dy_c
+
+    d2u_dy2 = _three_point_second(
+        u_ym, u_0, u_yp, hm_y[None, :], hp_y[None, :])
 
     return d2u_dx2 + d2u_dy2
 
@@ -155,17 +180,16 @@ def laplacian_v(v: np.ndarray, grid: CartesianGrid,
 
     Returns shape (nx, ny-1).
     """
-    dx, dy = grid.dx, grid.dy
+    v_0 = v[:, 1:-1]
 
-    # y-direction
-    v_ym = v[:, :-2]   # v[i, j-1]
-    v_yp = v[:, 2:]    # v[i, j+1]
-    v_0 = v[:, 1:-1]  # v[i, j]
-    d2v_dy2 = (v_yp - 2.0 * v_0 + v_ym) / dy**2
+    # y-direction at interior v-faces using local face spacing.
+    hm_y = grid.dy_f[:-1][None, :]
+    hp_y = grid.dy_f[1:][None, :]
+    d2v_dy2 = _three_point_second(v[:, :-2], v_0, v[:, 2:], hm_y, hp_y)
 
-    # x-direction
-    v_ghost_lft = _v_ghost_left(v[:, 1:-1], bc)
-    v_ghost_rgt = _v_ghost_right(v[:, 1:-1], bc, grid)
+    # x-direction with ghost columns for tangential-wall handling.
+    v_ghost_lft = _v_ghost_left(v_0, bc)
+    v_ghost_rgt = _v_ghost_right(v_0, bc, grid)
 
     v_xm = np.empty_like(v_0)
     v_xp = np.empty_like(v_0)
@@ -174,7 +198,16 @@ def laplacian_v(v: np.ndarray, grid: CartesianGrid,
     v_xp[:-1, :] = v_0[1:, :]
     v_xp[-1, :] = v_ghost_rgt
 
-    d2v_dx2 = (v_xp - 2.0 * v_0 + v_xm) / dx**2
+    hm_x = np.empty(grid.nx)
+    hp_x = np.empty(grid.nx)
+    hm_x[0] = grid.dx_f[0]
+    hp_x[-1] = grid.dx_f[-1]
+    if grid.nx > 1:
+        hp_x[:-1] = grid.dx_c
+        hm_x[1:] = grid.dx_c
+
+    d2v_dx2 = _three_point_second(
+        v_xm, v_0, v_xp, hm_x[:, None], hp_x[:, None])
 
     return d2v_dx2 + d2v_dy2
 
@@ -192,52 +225,44 @@ def convection_u(u: np.ndarray, v: np.ndarray,
 
     Uses 2nd-order central differencing.
     """
-    dx, dy = grid.dx, grid.dy
-    nx, ny = grid.nx, grid.ny
+    if not grid.is_nonuniform:
+        dx, dy = grid.dx, grid.dy
+        nx, ny = grid.nx, grid.ny
 
-    u_int = u[1:-1, :]    # interior u faces, shape (nx-1, ny)
+        u_int = u[1:-1, :]
 
-    # --- d(uu)/dx ---
-    # u at right face of control volume (at xc[i])  i=1..nx-1:
-    #   u_e = (u[i, j] + u[i+1, j]) / 2
-    # u at left face (at xc[i-1]):
-    #   u_w = (u[i-1, j] + u[i, j]) / 2
-    u_e = 0.5 * (u[1:-1, :] + u[2:, :])     # shape (nx-1, ny)
-    u_w = 0.5 * (u[:-2, :] + u[1:-1, :])   # shape (nx-1, ny)
-    duu_dx = (u_e**2 - u_w**2) / dx
+        u_e = 0.5 * (u[1:-1, :] + u[2:, :])
+        u_w = 0.5 * (u[:-2, :] + u[1:-1, :])
+        duu_dx = (u_e**2 - u_w**2) / dx
 
-    # --- d(vu)/dy ---
-    # v at top face of u-control-volume  (y = yf[j+1]):
-    #   v_n = (v[i-1, j+1] + v[i, j+1]) / 2   (v is at xc, so interpolate)
-    # u at top face:
-    #   u_n = (u[i, j] + u[i, j+1]) / 2
+        v_at_uf_x = 0.5 * (v[:-1, :] + v[1:, :])
 
-    # Build v at x=xf[i] (i=1..nx-1) by averaging v[i-1, :] and v[i, :]
-    # v has shape (nx, ny+1); indices 1..nx-1 → v[0..nx-2] and v[1..nx-1]
-    v_at_uf_x = 0.5 * (v[:-1, :] + v[1:, :])   # shape (nx-1, ny+1)
+        u_ghost_bot = _u_ghost_bottom(u_int, bc)
+        u_ghost_top = _u_ghost_top(u_int, bc, grid)
 
-    # Ghost rows for u in y
-    u_ghost_bot = _u_ghost_bottom(u_int, bc)   # shape (nx-1,)
-    u_ghost_top = _u_ghost_top(u_int, bc, grid)
+        u_n = np.empty((nx - 1, ny))
+        u_n[:, :-1] = 0.5 * (u_int[:, :-1] + u_int[:, 1:])
+        u_n[:, -1] = 0.5 * (u_int[:, -1] + u_ghost_top)
 
-    # u_n = (u[i, j] + u[i, j+1]) / 2
-    u_n = np.empty((nx - 1, ny))
-    u_n[:, :-1] = 0.5 * (u_int[:, :-1] + u_int[:, 1:])
-    u_n[:, -1] = 0.5 * (u_int[:, -1] + u_ghost_top)
+        u_s = np.empty((nx - 1, ny))
+        u_s[:, 1:] = 0.5 * (u_int[:, :-1] + u_int[:, 1:])
+        u_s[:, 0] = 0.5 * (u_ghost_bot + u_int[:, 0])
 
-    # u_s = (u[i, j-1] + u[i, j]) / 2
-    u_s = np.empty((nx - 1, ny))
-    u_s[:, 1:] = 0.5 * (u_int[:, :-1] + u_int[:, 1:])
-    u_s[:, 0] = 0.5 * (u_ghost_bot + u_int[:, 0])
+        v_n = v_at_uf_x[:, 1:]
+        v_s = v_at_uf_x[:, :-1]
+        dvu_dy = (v_n * u_n - v_s * u_s) / dy
 
-    # v_n  (at y-face j+1)
-    v_n = v_at_uf_x[:, 1:]    # shape (nx-1, ny)
-    # v_s  (at y-face j)
-    v_s = v_at_uf_x[:, :-1]   # shape (nx-1, ny)
+        return -(duu_dx + dvu_dy)
 
-    dvu_dy = (v_n * u_n - v_s * u_s) / dy
+    u_int = u[1:-1, :]
+    dudx = _first_derivative(u_int, grid.xf[1:-1], axis=0)
+    dudy = _first_derivative(u_int, grid.yc, axis=1)
 
-    return -(duu_dx + dvu_dy)
+    # Interpolate v to u locations (xf interior, yc).
+    v_at_uf_x = 0.5 * (v[:-1, :] + v[1:, :])
+    v_at_u = 0.5 * (v_at_uf_x[:, :-1] + v_at_uf_x[:, 1:])
+
+    return -(u_int * dudx + v_at_u * dudy)
 
 
 def convection_v(u: np.ndarray, v: np.ndarray,
@@ -247,48 +272,44 @@ def convection_v(u: np.ndarray, v: np.ndarray,
 
     Returns shape (nx, ny-1).
     """
-    dx, dy = grid.dx, grid.dy
-    nx, ny = grid.nx, grid.ny
+    if not grid.is_nonuniform:
+        dx, dy = grid.dx, grid.dy
+        nx, ny = grid.nx, grid.ny
 
-    v_int = v[:, 1:-1]   # interior v faces, shape (nx, ny-1)
+        v_int = v[:, 1:-1]
 
-    # --- d(uv)/dx ---
-    # u at y = yf[j]  (j=1..ny-1) — interpolate u at x-faces to xc:
-    #   u at right face of v-control-vol (at xf[i+1]):  u[i+1, j-1+1] & u[i+1, j]
-    # v at right face:
-    #   v_e = (v[i, j] + v[i+1, j]) / 2
+        u_at_yf = 0.5 * (u[:, :-1] + u[:, 1:])
+        u_e = u_at_yf[1:, :]
+        u_w = u_at_yf[:-1, :]
 
-    # u at y-face yf[j]: u is at yc, so need to interpolate to yf[j]
-    # u_at_yf[i, j] = (u[i, j-1] + u[i, j]) / 2  for j=1..ny-1
-    #   u shape (nx+1, ny); u_at_yf shape (nx+1, ny-1)
-    u_at_yf = 0.5 * (u[:, :-1] + u[:, 1:])   # shape (nx+1, ny-1)
+        v_ghost_lft = _v_ghost_left(v_int, bc)
+        v_ghost_rgt = _v_ghost_right(v_int, bc, grid)
 
-    # u at right face of v-cell (xf[i+1], yf[j]):
-    u_e = u_at_yf[1:, :]   # shape (nx, ny-1)   [i+1, j] i=0..nx-1
-    # u at left face of v-cell (xf[i], yf[j]):
-    u_w = u_at_yf[:-1, :]  # shape (nx, ny-1)   [i,   j]
+        v_e = np.empty((nx, ny - 1))
+        v_e[:-1, :] = 0.5 * (v_int[:-1, :] + v_int[1:, :])
+        v_e[-1, :] = 0.5 * (v_int[-1, :] + v_ghost_rgt)
 
-    # v_e = (v[i, j] + v[i+1, j]) / 2
-    v_ghost_lft = _v_ghost_left(v_int, bc)     # shape (ny-1,)
-    v_ghost_rgt = _v_ghost_right(v_int, bc, grid)
+        v_w = np.empty((nx, ny - 1))
+        v_w[1:, :] = 0.5 * (v_int[:-1, :] + v_int[1:, :])
+        v_w[0, :] = 0.5 * (v_ghost_lft + v_int[0, :])
 
-    v_e = np.empty((nx, ny - 1))
-    v_e[:-1, :] = 0.5 * (v_int[:-1, :] + v_int[1:, :])
-    v_e[-1, :] = 0.5 * (v_int[-1, :] + v_ghost_rgt)
+        duv_dx = (u_e * v_e - u_w * v_w) / dx
 
-    v_w = np.empty((nx, ny - 1))
-    v_w[1:, :] = 0.5 * (v_int[:-1, :] + v_int[1:, :])
-    v_w[0, :] = 0.5 * (v_ghost_lft + v_int[0, :])
+        v_n = 0.5 * (v_int + v[:, 2:])
+        v_s = 0.5 * (v[:, :-2] + v_int)
+        dvv_dy = (v_n**2 - v_s**2) / dy
 
-    duv_dx = (u_e * v_e - u_w * v_w) / dx
+        return -(duv_dx + dvv_dy)
 
-    # --- d(vv)/dy ---
-    v_n = 0.5 * (v_int + v[:, 2:])    # (v[j] + v[j+1]) / 2
-    v_s = 0.5 * (v[:, :-2] + v_int)   # (v[j-1] + v[j]) / 2
+    v_int = v[:, 1:-1]
+    dvdx = _first_derivative(v_int, grid.xc, axis=0)
+    dvdy = _first_derivative(v_int, grid.yf[1:-1], axis=1)
 
-    dvv_dy = (v_n**2 - v_s**2) / dy
+    # Interpolate u to v locations (xc, yf interior).
+    u_at_yf = 0.5 * (u[:, :-1] + u[:, 1:])
+    u_at_v = 0.5 * (u_at_yf[:-1, :] + u_at_yf[1:, :])
 
-    return -(duv_dx + dvv_dy)
+    return -(u_at_v * dvdx + v_int * dvdy)
 
 
 # ---------------------------------------------------------------------------

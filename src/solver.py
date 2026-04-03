@@ -43,7 +43,7 @@ import numpy as np
 from src.grid import CartesianGrid
 from src.boundary import BoundaryConfig, apply_velocity_bc, apply_pressure_bc, \
     apply_post_correction_bc
-from src.operators import rhs_u, rhs_v, divergence
+from src.operators import rhs_u, rhs_v, divergence, laplacian_u, laplacian_v
 from src.poisson import PoissonSolver
 from src.rk3 import ssp_rk3_step
 from src.ibm import ImmersedBoundary
@@ -112,6 +112,21 @@ class FractionalStepSolver:
         nu = self.nu
         self.last_ibm_force_x = 0.0
         self.last_ibm_force_y = 0.0
+        # SOFT_FIX_NONUNIFORM_IBM (search token)
+        # Stabilization knobs used only for non-uniform IBM runs.
+        # If future method improvements are added, replace/remove this block.
+        ibm_relax = 0.3 if (
+            self.ibm is not None and self.ibm.has_solid and grid.is_nonuniform) else 1.0
+        nu_stab_floor = 0.03
+
+        def _expand_mask(mask: np.ndarray) -> np.ndarray:
+            # SOFT_FIX_NONUNIFORM_IBM: one-ring mask expansion.
+            out = mask.copy()
+            out[:-1, :] |= mask[1:, :]
+            out[1:, :] |= mask[:-1, :]
+            out[:, :-1] |= mask[:, 1:]
+            out[:, 1:] |= mask[:, :-1]
+            return out
 
         # ----------------------------------------------------------------
         # Step 1 — SSP-RK3 for convection-diffusion (no pressure)
@@ -120,9 +135,27 @@ class FractionalStepSolver:
             """RHS callable for the RK integrator."""
             apply_velocity_bc(u, v, grid, bc, dt=dt)
             if self.ibm is not None and self.ibm.has_solid:
-                self.ibm.apply(u, v)
+                self.ibm.apply(u, v, relax=ibm_relax)
             Lu = rhs_u(u, v, grid, bc, nu)
             Lv = rhs_v(u, v, grid, bc, nu)
+            if self.ibm is not None and self.ibm.has_solid:
+                if grid.is_nonuniform and nu < nu_stab_floor:
+                    # SOFT_FIX_NONUNIFORM_IBM: supplemental diffusion floor.
+                    # Extra dissipation stabilises IBM on stretched grids.
+                    nu_extra = nu_stab_floor - nu
+                    Lu += nu_extra * laplacian_u(u, grid, bc)
+                    Lv += nu_extra * laplacian_v(v, grid, bc)
+                # Do not advance momentum inside the immersed solid region.
+                Lu[self.ibm.mask_u[1:-1, :]] = 0.0
+                Lv[self.ibm.mask_v[:, 1:-1]] = 0.0
+                if grid.is_nonuniform:
+                    # SOFT_FIX_NONUNIFORM_IBM: damping ring around IBM interface.
+                    # Extra damping in a one-cell ring around IBM masks to
+                    # stabilise steep metric/forcing transitions.
+                    mu = _expand_mask(self.ibm.mask_u[1:-1, :])
+                    mv = _expand_mask(self.ibm.mask_v[:, 1:-1])
+                    Lu[mu] = 0.0
+                    Lv[mv] = 0.0
             return Lu, Lv
 
         u_star, v_star = ssp_rk3_step(_rhs, self.u, self.v, dt)
@@ -131,7 +164,7 @@ class FractionalStepSolver:
         apply_velocity_bc(u_star, v_star, grid, bc, dt=dt)
         if self.ibm is not None and self.ibm.has_solid:
             self.last_ibm_force_x, self.last_ibm_force_y = self.ibm.apply(
-                u_star, v_star, dt=dt
+                u_star, v_star, dt=dt, relax=ibm_relax
             )
 
         # ----------------------------------------------------------------
@@ -148,11 +181,11 @@ class FractionalStepSolver:
         # ----------------------------------------------------------------
         # Interior x-faces: i = 1 .. nx-1
         u_new = u_star.copy()
-        u_new[1:-1, :] -= dt * (phi[1:, :] - phi[:-1, :]) / grid.dx
+        u_new[1:-1, :] -= dt * (phi[1:, :] - phi[:-1, :]) / grid.dx_c[:, None]
 
         # Interior y-faces: j = 1 .. ny-1
         v_new = v_star.copy()
-        v_new[:, 1:-1] -= dt * (phi[:, 1:] - phi[:, :-1]) / grid.dy
+        v_new[:, 1:-1] -= dt * (phi[:, 1:] - phi[:, :-1]) / grid.dy_c[None, :]
 
         # ----------------------------------------------------------------
         # Step 4 — Pressure update
@@ -166,7 +199,7 @@ class FractionalStepSolver:
         # ----------------------------------------------------------------
         apply_post_correction_bc(u_new, v_new, grid, bc, dt=dt)
         if self.ibm is not None and self.ibm.has_solid:
-            self.ibm.apply(u_new, v_new)
+            self.ibm.apply(u_new, v_new, relax=ibm_relax)
 
         self.u = u_new
         self.v = v_new
@@ -186,16 +219,18 @@ class FractionalStepSolver:
         # Interpolate u, v to cell centres for CFL estimate
         u_c = 0.5 * (self.u[:-1, :] + self.u[1:, :])
         v_c = 0.5 * (self.v[:, :-1] + self.v[:, 1:])
-        cfl_x = np.max(np.abs(u_c)) * dt / grid.dx
-        cfl_y = np.max(np.abs(v_c)) * dt / grid.dy
-        return max(cfl_x, cfl_y)
+        cfl_local = (
+            np.abs(u_c) / grid.dx_f[:, None] + np.abs(v_c) / grid.dy_f[None, :]) * dt
+        return float(np.max(cfl_local))
 
     def suggest_dt(self, cfl_target: float = 0.5, dt_max: float = 0.1) -> float:
         """Suggest a stable time step based on convective CFL and diffusion."""
         grid = self.grid
         u_max = max(np.max(np.abs(self.u)), 1e-12)
         v_max = max(np.max(np.abs(self.v)), 1e-12)
-        dt_conv = cfl_target * min(grid.dx / u_max, grid.dy / v_max)
+        inv_dt_conv = np.max(np.abs(u_max) / grid.dx_f) + \
+            np.max(np.abs(v_max) / grid.dy_f)
+        dt_conv = cfl_target / max(inv_dt_conv, 1e-12)
         dt_diff = 0.5 * cfl_target / \
-            (self.nu * (1.0 / grid.dx**2 + 1.0 / grid.dy**2))
+            (self.nu * (1.0 / grid.dx_min**2 + 1.0 / grid.dy_min**2))
         return min(dt_conv, dt_diff, dt_max)

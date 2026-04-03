@@ -57,6 +57,27 @@ class TestCartesianGrid2D:
         p = g.zeros_p()
         assert p.shape == (4, 3)
 
+    def test_stretched_faces_are_monotone(self):
+        g = CartesianGrid(32, 16, lx=4.0, ly=2.0,
+                          x_spacing="stretched", y_spacing="stretched",
+                          x_focus=1.0, y_focus=1.0,
+                          x_stretch=4.0, y_stretch=3.0)
+        assert np.all(np.diff(g.xf) > 0.0)
+        assert np.all(np.diff(g.yf) > 0.0)
+        assert np.isclose(g.xf[0], 0.0)
+        assert np.isclose(g.xf[-1], 4.0)
+        assert np.isclose(g.yf[0], 0.0)
+        assert np.isclose(g.yf[-1], 2.0)
+
+    def test_stretched_grid_clusters_near_focus(self):
+        g = CartesianGrid(64, 32, lx=4.0, ly=2.0,
+                          x_spacing="stretched", x_focus=1.0, x_stretch=5.0)
+        i_focus = int(np.argmin(np.abs(g.xc - 1.0)))
+        i_left = max(i_focus - 8, 0)
+        i_right = min(i_focus + 8, g.nx - 1)
+        min_local = np.min(g.dx_f[i_left:i_right + 1])
+        assert min_local < np.mean(g.dx_f)
+
 
 class TestCartesianGrid3D:
     def test_3d_flag(self):

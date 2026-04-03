@@ -120,7 +120,8 @@ class ImmersedBoundary:
 
     def apply(self, u: np.ndarray, v: np.ndarray,
               u_body: float = 0.0, v_body: float = 0.0,
-              dt: float = None, rho: float = 1.0):
+              dt: float = None, rho: float = 1.0,
+              relax: float = 1.0):
         """
         Apply direct forcing **in-place**: set solid-face velocities to the
         prescribed body velocity (default: 0 for stationary body).
@@ -130,6 +131,10 @@ class ImmersedBoundary:
         """
         force_x = 0.0
         force_y = 0.0
+        # SOFT_FIX_NONUNIFORM_IBM (search token)
+        # Relaxed direct forcing for stretched-grid stability.
+        # 1.0 = classic hard forcing, <1.0 = blended forcing.
+        relax = float(np.clip(relax, 0.0, 1.0))
         if dt is not None and dt > 0.0:
             face_area = self.grid.dx * self.grid.dy
             force_x = rho * face_area * \
@@ -137,8 +142,12 @@ class ImmersedBoundary:
             force_y = rho * face_area * \
                 float(np.sum(v[self.mask_v] - v_body)) / dt
 
-        u[self.mask_u] = u_body
-        v[self.mask_v] = v_body
+        if relax >= 1.0 - 1e-12:
+            u[self.mask_u] = u_body
+            v[self.mask_v] = v_body
+        else:
+            u[self.mask_u] = (1.0 - relax) * u[self.mask_u] + relax * u_body
+            v[self.mask_v] = (1.0 - relax) * v[self.mask_v] + relax * v_body
         return force_x, force_y
 
     @property

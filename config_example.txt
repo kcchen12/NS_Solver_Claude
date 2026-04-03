@@ -9,6 +9,17 @@ ny = 64
 lx = 4.0
 ly = 2.0
 
+# Grid spacing mode
+# x_spacing / y_spacing: uniform | stretched
+x_spacing = uniform
+y_spacing = uniform
+# Focus location for stretched mode (physical coordinates; <0 means domain center)
+x_focus = -1.0
+y_focus = -1.0
+# Stretch intensity (higher clusters more cells near focus)
+x_stretch = 3.0
+y_stretch = 3.0
+
 # Physics parameters
 re = 100.0
 

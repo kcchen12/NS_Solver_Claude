@@ -71,6 +71,12 @@ All arguments are optional and override values in `config.txt`:
 --ny INT           Grid cells in y direction (default: from config)
 --lx FLOAT         Domain length in x (default: from config)
 --ly FLOAT         Domain length in y (default: from config)
+--x-spacing STR    Grid spacing in x: uniform|stretched
+--y-spacing STR    Grid spacing in y: uniform|stretched
+--x-focus FLOAT    Focus location in x for stretched grids
+--y-focus FLOAT    Focus location in y for stretched grids
+--x-stretch FLOAT  Stretch intensity in x
+--y-stretch FLOAT  Stretch intensity in y
 --re FLOAT         Reynolds number (default: from config)
 --t_end FLOAT      Simulation end time (default: from config)
 --cfl FLOAT        CFL number for time stepping (default: from config)
@@ -91,6 +97,17 @@ Configuration is specified in `config.txt`. See `config_example.txt` for a compl
 ### Domain Dimensions
 - **lx** - Physical domain length in x direction (default: 4.0)
 - **ly** - Physical domain length in y direction (default: 2.0)
+
+### Non-Uniform Grid (Optional)
+- **x_spacing, y_spacing** - `uniform` or `stretched` (default: `uniform`)
+- **x_focus, y_focus** - Physical focus location for clustering (set `<0` to use domain center)
+- **x_stretch, y_stretch** - Stretch strength; larger values cluster more cells near focus
+
+Example: cluster cells around a cylinder near `(x=1.0, y=1.0)`:
+
+```bash
+python main.py --x-spacing stretched --y-spacing stretched --x-focus 1.0 --y-focus 1.0 --x-stretch 4.0 --y-stretch 4.0
+```
 
 ### Physics Parameters
 - **re** - Reynolds number ($Re = \frac{U_\infty L}{\nu}$). Higher values = less viscous flow (default: 100.0)

@@ -1,8 +1,8 @@
 """Tests for FVM spatial operators."""
 import numpy as np
 import pytest
-from src.grid      import CartesianGrid
-from src.boundary  import BoundaryConfig, BCType
+from src.grid import CartesianGrid
+from src.boundary import BoundaryConfig, BCType
 from src.operators import divergence, laplacian_u, laplacian_v, rhs_u, rhs_v
 
 
@@ -48,6 +48,17 @@ class TestDivergence:
         div = divergence(u, v, g)
         # du/dx = 1 everywhere
         assert np.allclose(div, 1.0)
+
+    def test_linear_x_velocity_nonuniform_grid(self):
+        """u = x should give du/dx = 1 on stretched x-grids as well."""
+        g = CartesianGrid(24, 12, lx=2.0, ly=1.0,
+                          x_spacing="stretched", x_focus=0.8, x_stretch=4.0)
+        u = np.zeros(g.u_shape)
+        for i in range(g.nx + 1):
+            u[i, :] = g.xf[i]
+        v = np.zeros(g.v_shape)
+        div = divergence(u, v, g)
+        assert np.allclose(div, 1.0, atol=1e-10)
 
 
 # ---------------------------------------------------------------------------
