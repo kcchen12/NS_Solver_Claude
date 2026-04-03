@@ -261,23 +261,91 @@ def run(args):
     # ------------------------------------------------------------------
     t_save_next = 0.0
     step_count = 0
+    last_report_t = 0.0
+    stiff_regime = bool(args.cylinder)
+    cfl_eff = float(args.cfl)
+    div_prev = float(np.max(np.abs(solver.divergence())))
 
     if is_root and args.verbose:
         print(f"\n  Starting time loop …")
 
     while solver.t < args.t_end - 1e-12:
-        dt = solver.suggest_dt(cfl_target=args.cfl)
+        dt = solver.suggest_dt(cfl_target=cfl_eff)
         dt = min(dt, args.t_end - solver.t)
 
-        solver.step(dt)
-        step_count += 1
+        # Safety stop: avoid endless loops when dt collapses after instability.
+        if (not np.isfinite(dt)) or dt <= 0.0 or dt < 1e-14:
+            if is_root:
+                print("  Stopping early: timestep collapsed "
+                      f"(dt={dt:.3e}) at t={solver.t:.6f}.")
+            break
+
+        if not stiff_regime:
+            solver.step(dt)
+            step_count += 1
+            div_prev = float(np.max(np.abs(solver.divergence())))
+        else:
+            accepted = False
+            dt_try = dt
+            retry_count = 0
+            while retry_count < 8:
+                u_old = solver.u.copy()
+                v_old = solver.v.copy()
+                p_old = solver.p.copy()
+                t_old = solver.t
+                fx_old = solver.last_ibm_force_x
+                fy_old = solver.last_ibm_force_y
+
+                solver.step(dt_try)
+                div_new = float(np.max(np.abs(solver.divergence())))
+
+                growth_limit = max(20.0, 1.4 * max(div_prev, 1e-12))
+                abs_limit = 200.0
+                if np.isfinite(div_new) and div_new <= growth_limit and div_new <= abs_limit:
+                    accepted = True
+                    div_prev = div_new
+                    break
+
+                # Reject step: restore and retry with smaller dt.
+                solver.u = u_old
+                solver.v = v_old
+                solver.p = p_old
+                solver.t = t_old
+                solver.last_ibm_force_x = fx_old
+                solver.last_ibm_force_y = fy_old
+                dt_try *= 0.5
+                cfl_eff = max(0.02, 0.7 * cfl_eff)
+                retry_count += 1
+
+                if dt_try < 1e-14:
+                    break
+
+            if not accepted:
+                if is_root:
+                    print("  Stopping early: could not accept a stable step "
+                          f"near t={solver.t:.6f}.")
+                break
+
+            dt = dt_try
+            step_count += 1
+
+            # Slowly recover target CFL after stable accepts.
+            if retry_count == 0:
+                cfl_eff = min(float(args.cfl), cfl_eff * 1.005)
 
         # ---- diagnostics ----
         if is_root and args.verbose and step_count % 50 == 0:
             div_max = np.max(np.abs(solver.divergence()))
             cfl_val = solver.cfl(dt)
-            print(f"  t={solver.t:8.4f}  dt={dt:.2e}  "
-                  f"|∇·u|_max={div_max:.2e}  CFL={cfl_val:.3f}")
+            t_chunk = solver.t - last_report_t
+            last_report_t = solver.t
+            print(f"  step={step_count:7d}  t={solver.t:10.6f}  "
+                  f"dt={dt:.3e}  Δt(50)={t_chunk:.3e}  "
+                  f"|∇·u|_max={div_max:.2e}  CFL={cfl_val:.3f} "
+                  f"(cfl_eff={cfl_eff:.3f})")
+            if not np.isfinite(div_max):
+                print("  Stopping early: divergence became non-finite.")
+                break
 
         # ---- save snapshot ----
         if solver.t >= t_save_next - 1e-12:
@@ -324,30 +392,47 @@ def _plot_results(solver, grid, args):
     v_c = 0.5 * (solver.v[:, :-1] + solver.v[:, 1:])
     speed = np.sqrt(u_c**2 + v_c**2)
 
+    # Vorticity for 2-D flow: omega_z = dv/dx - du/dy
+    edge_x = 2 if grid.nx >= 3 else 1
+    edge_y = 2 if grid.ny >= 3 else 1
+    dv_dx = np.gradient(v_c, grid.xc, axis=0, edge_order=edge_x)
+    du_dy = np.gradient(u_c, grid.yc, axis=1, edge_order=edge_y)
+    omega = dv_dx - du_dy
+
+    # Protect plotting from occasional NaN/Inf values in unstable runs.
+    u_plot = np.nan_to_num(u_c, nan=0.0, posinf=0.0, neginf=0.0)
+    v_plot = np.nan_to_num(v_c, nan=0.0, posinf=0.0, neginf=0.0)
+    speed_plot = np.nan_to_num(speed, nan=0.0, posinf=0.0, neginf=0.0)
+    omega_plot = np.nan_to_num(omega, nan=0.0, posinf=0.0, neginf=0.0)
+    p_plot = np.nan_to_num(solver.p, nan=0.0, posinf=0.0, neginf=0.0)
+
     X, Y = np.meshgrid(grid.xc, grid.yc, indexing="ij")
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 
-    # Speed
-    im0 = axes[0].contourf(X, Y, speed, 50, cmap="viridis")
+    # Vorticity
+    wmax = float(np.max(np.abs(omega_plot)))
+    wmax = max(wmax, 1e-8)
+    levels = np.linspace(-wmax, wmax, 61)
+    im0 = axes[0].contourf(X, Y, omega_plot, levels=levels,
+                           cmap="RdBu_r", extend="both")
     fig.colorbar(im0, ax=axes[0])
-    axes[0].set_title("Speed |u|")
+    axes[0].set_title(r"Vorticity $\omega_z$")
     axes[0].set_xlabel("x")
     axes[0].set_ylabel("y")
     axes[0].set_aspect("equal")
 
     # Pressure
-    im1 = axes[1].contourf(X, Y, solver.p, 50, cmap="RdBu_r")
+    im1 = axes[1].contourf(X, Y, p_plot, 50, cmap="RdBu_r")
     fig.colorbar(im1, ax=axes[1])
     axes[1].set_title("Pressure p")
     axes[1].set_xlabel("x")
     axes[1].set_ylabel("y")
     axes[1].set_aspect("equal")
 
-    # Streamlines
     axes[2].streamplot(grid.xc, grid.yc,
-                       u_c.T, v_c.T,
-                       density=1.5, color=speed.T, cmap="plasma")
+                       u_plot.T, v_plot.T,
+                       density=1.5, color=speed_plot.T, cmap="plasma")
     axes[2].set_title("Streamlines")
     axes[2].set_xlabel("x")
     axes[2].set_ylabel("y")

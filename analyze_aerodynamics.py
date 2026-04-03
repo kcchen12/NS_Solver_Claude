@@ -111,6 +111,80 @@ def _safe_scalar(data: np.lib.npyio.NpzFile, key: str) -> Optional[float]:
     return float(np.array(data[key]).item())
 
 
+def _safe_text(data: np.lib.npyio.NpzFile, key: str) -> Optional[str]:
+    if key not in data.files:
+        return None
+    raw = np.array(data[key]).item()
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="ignore")
+    return str(raw)
+
+
+def _snapshot_consistency_signature(path: str) -> Tuple:
+    """Return a compact signature used to detect mixed snapshot sets."""
+    with np.load(path) as data:
+        p = data["p"]
+        nx = int(p.shape[0])
+        ny = int(p.shape[1])
+        lx = _safe_scalar(data, "meta_lx")
+        ly = _safe_scalar(data, "meta_ly")
+        x_spacing = _safe_text(data, "meta_x_spacing")
+        y_spacing = _safe_text(data, "meta_y_spacing")
+        x_focus = _safe_scalar(data, "meta_x_focus")
+        y_focus = _safe_scalar(data, "meta_y_focus")
+        x_stretch = _safe_scalar(data, "meta_x_stretch")
+        y_stretch = _safe_scalar(data, "meta_y_stretch")
+        re = _safe_scalar(data, "meta_re")
+
+    def _round_or_none(v: Optional[float]) -> Optional[float]:
+        return None if v is None else round(float(v), 10)
+
+    return (
+        nx,
+        ny,
+        _round_or_none(lx),
+        _round_or_none(ly),
+        x_spacing,
+        y_spacing,
+        _round_or_none(x_focus),
+        _round_or_none(y_focus),
+        _round_or_none(x_stretch),
+        _round_or_none(y_stretch),
+        _round_or_none(re),
+    )
+
+
+def _validate_snapshot_consistency(
+    snapshots: List[Tuple[float, str]],
+    allow_mixed_snapshots: bool,
+) -> None:
+    """Detect mixed-run datasets that invalidate aerodynamic comparisons."""
+    if not snapshots:
+        return
+
+    signatures: Dict[Tuple, int] = {}
+    for _, path in snapshots:
+        sig = _snapshot_consistency_signature(path)
+        signatures[sig] = signatures.get(sig, 0) + 1
+
+    if len(signatures) <= 1:
+        return
+
+    if allow_mixed_snapshots:
+        print(
+            f"WARNING: detected {len(signatures)} distinct snapshot metadata signatures. "
+            "Results may be inconsistent across mixed runs."
+        )
+        return
+
+    counts = sorted(signatures.values(), reverse=True)
+    raise ValueError(
+        "Detected mixed snapshot metadata (multiple run signatures) in input set. "
+        f"Found {len(signatures)} signatures with counts {counts}. "
+        "Clear output/ or pass --allow-mixed-snapshots to override."
+    )
+
+
 def _read_config(config_path: str) -> Dict[str, float]:
     """Parse config file and return dictionary of key-value pairs."""
     config = {}
@@ -398,13 +472,15 @@ def _compute_pressure_forces(
 def _compute_forces(
     snapshot_path: str,
     force_plan: SurfaceForcePlan,
+    force_source: str,
 ) -> Tuple[float, float]:
     """Compute x and y forces from a single snapshot."""
     with np.load(snapshot_path) as data:
-        fx_meta = _safe_scalar(data, "meta_ibm_force_x")
-        fy_meta = _safe_scalar(data, "meta_ibm_force_y")
-        if fx_meta is not None and fy_meta is not None:
-            return float(fx_meta), float(fy_meta)
+        if force_source in ("metadata", "auto"):
+            fx_meta = _safe_scalar(data, "meta_ibm_force_x")
+            fy_meta = _safe_scalar(data, "meta_ibm_force_y")
+            if fx_meta is not None and fy_meta is not None:
+                return float(fx_meta), float(fy_meta)
         p = data["p"]
     return _compute_pressure_forces(p, force_plan)
 
@@ -439,6 +515,7 @@ def _extract_combined_series(
     geom: CylinderGeometry,
     u_ref: float,
     char_length: float,
+    force_source: str,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Extract probe series and forces for all snapshots.
 
@@ -461,7 +538,7 @@ def _extract_combined_series(
     c_l_arr = np.empty(n, dtype=float)
 
     for k, (_, path) in enumerate(snapshots):
-        f_x, f_y = _compute_forces(path, force_plan)
+        f_x, f_y = _compute_forces(path, force_plan, force_source)
         c_d, c_l = _compute_coefficients(f_x, f_y, u_ref, char_length)
         f_x_arr[k] = f_x
         f_y_arr[k] = f_y
@@ -505,6 +582,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-freq", type=int, default=4000,
                         help="Number of frequency samples (default: 4000)")
 
+    parser.add_argument(
+        "--force-source",
+        type=str,
+        choices=("pressure", "metadata", "auto"),
+        default="pressure",
+        help=(
+            "Force source for drag/lift coefficients: "
+            "pressure (surface integral), metadata (meta_ibm_force_*), "
+            "or auto (metadata when present, else pressure). "
+            "Default: pressure"
+        ),
+    )
+    parser.add_argument(
+        "--allow-mixed-snapshots",
+        action="store_true",
+        help=(
+            "Allow analysis on mixed snapshot sets from different run settings. "
+            "By default this is rejected to avoid misleading coefficients."
+        ),
+    )
+
     parser.add_argument("--save-series", type=str, default=None,
                         help="Optional CSV path for combined time series")
     parser.add_argument("--save-report", type=str,
@@ -523,6 +621,11 @@ def main() -> int:
         print(
             f"No snapshots found in {args.indir!r} with pattern {args.pattern!r}.")
         return 1
+
+    _validate_snapshot_consistency(
+        snapshots,
+        allow_mixed_snapshots=args.allow_mixed_snapshots,
+    )
 
     # Estimate common scales
     l_char, u_ref, nx, ny, lx, ly = _estimate_scales(
@@ -552,6 +655,7 @@ def main() -> int:
         geom=geom,
         u_ref=u_ref,
         char_length=l_char,
+        force_source=args.force_source,
     )
 
     # Save combined time series
@@ -605,6 +709,7 @@ def main() -> int:
     print(f"Cylinder radius   : {geom.radius:.6g}")
     print(f"Char. length (L)  : {l_char:.6g}")
     print(f"Ref. velocity (U) : {u_ref:.6g}")
+    print(f"Force source      : {args.force_source}")
     print()
     print("-" * 70)
     print("STROUHAL NUMBER ANALYSIS")
@@ -659,6 +764,7 @@ def main() -> int:
             f"Cylinder radius   : {geom.radius:.6g}",
             f"Char. length (L)  : {l_char:.6g}",
             f"Ref. velocity (U) : {u_ref:.6g}",
+            f"Force source      : {args.force_source}",
             "",
             "-" * 70,
             "STROUHAL NUMBER ANALYSIS",
