@@ -50,5 +50,11 @@ cylinder = true
 cylinder_radius = 0.5
 # If true, re is interpreted as Re_D based on cylinder diameter
 re_is_cylinder_based = true
+# Aerodynamic post-processing normalization (used by analyze_aerodynamics.py)
+# Set >0 to force characteristic length L in St=fL/U and coefficient scaling.
+# Example for legacy normalization: aero_length_scale = 0.5
+# aero_length_scale = -1
+# If true, use L = ly/4 for post-processing when aero_length_scale is not set.
+# aero_use_cylinder_diameter = false
 plot = true
 verbose = true

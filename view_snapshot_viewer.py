@@ -12,7 +12,11 @@ Usage examples:
   python view_snapshot_viewer.py -k pressure --save out.png
 
     # plot drag/lift coefficient histories from output CSVs
+    # (default trims startup and plots from t >= 0.5)
     python view_snapshot_viewer.py --plot-coeffs --save coeff_history.png
+
+    # override startup trim if needed
+    python view_snapshot_viewer.py --plot-coeffs --coeff-t-min 0.25 --save coeff_history.png
 
 The script attempts to guess array layouts but accepts explicit --slice and --comp parameters.
 """
@@ -158,19 +162,62 @@ def detect_oscillation_start_index(
     return starts[valid[0]]
 
 
-def plot_coeff_history(csv_path: str, save_name: Optional[str] = None) -> None:
+def detect_startup_trim_index(
+    t: np.ndarray,
+    c_d: np.ndarray,
+    c_l: np.ndarray,
+    coeff_t_min: Optional[float] = None,
+) -> int:
+    """Return index to start plotting, trimming startup transients/outliers."""
+    if t.size == 0:
+        return 0
+
+    if coeff_t_min is not None:
+        return int(np.searchsorted(t, coeff_t_min, side="left"))
+
+    # Auto-trim a single extreme startup point if it is a clear outlier.
+    n = len(t)
+    if n < 8:
+        return 0
+
+    w = min(20, n - 1)
+    cd_base = c_d[1:1 + w]
+    cl_base = c_l[1:1 + w]
+
+    cd_scale = float(np.std(cd_base)) + 1e-12
+    cl_scale = float(np.std(cl_base)) + 1e-12
+    cd_z = abs(float(c_d[0] - np.median(cd_base))) / cd_scale
+    cl_z = abs(float(c_l[0] - np.median(cl_base))) / cl_scale
+
+    return 1 if max(cd_z, cl_z) >= 8.0 else 0
+
+
+def plot_coeff_history(
+    csv_path: str,
+    save_name: Optional[str] = None,
+    coeff_t_min: Optional[float] = None,
+) -> None:
     """Plot drag and lift coefficients as functions of time."""
     t, c_d, c_l = load_coeff_series(csv_path)
+    i_plot_start = detect_startup_trim_index(
+        t, c_d, c_l, coeff_t_min=coeff_t_min)
+    if i_plot_start >= len(t):
+        raise ValueError("No coefficient samples left after startup trimming.")
+
+    t_plot = t[i_plot_start:]
+    c_d_plot = c_d[i_plot_start:]
+    c_l_plot = c_l[i_plot_start:]
+
     i_start = detect_oscillation_start_index(t, c_l, c_d)
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
-    ax1.plot(t, c_d, color="tab:blue", linewidth=1.6)
+    ax1.plot(t_plot, c_d_plot, color="tab:blue", linewidth=1.6)
     ax1.set_ylabel("C_d")
     ax1.set_title(f"Drag/Lift Coefficient History ({os.path.basename(csv_path)})",
                   fontsize=12, fontweight="bold")
     ax1.grid(True, alpha=0.3)
 
-    ax2.plot(t, c_l, color="tab:orange", linewidth=1.6)
+    ax2.plot(t_plot, c_l_plot, color="tab:orange", linewidth=1.6)
     ax2.set_xlabel("time")
     ax2.set_ylabel("C_l")
     ax2.grid(True, alpha=0.3)
@@ -186,6 +233,7 @@ def plot_coeff_history(csv_path: str, save_name: Optional[str] = None) -> None:
         plt.show()
 
     # Also create oscillation-only view starting from the detected onset.
+    i_start = max(i_start, i_plot_start)
     fig2, (ax3, ax4) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
     ax3.plot(t[i_start:], c_d[i_start:], color="tab:blue", linewidth=1.6)
     ax3.set_ylabel("C_d")
@@ -275,6 +323,9 @@ def main(argv=None):
                         help="path to coefficient CSV (default: auto from output/)")
     parser.add_argument("--coeff-indir", type=str, default="output",
                         help="directory searched for forces.csv/aero.csv (default: output)")
+    parser.add_argument("--coeff-t-min", type=float, default=0.5,
+                        help="minimum time for coefficient plots (default: 0.5)"
+                        )
     args = parser.parse_args(argv)
 
     if args.plot_coeffs:
@@ -285,7 +336,8 @@ def main(argv=None):
                   file=sys.stderr)
             sys.exit(7)
         try:
-            plot_coeff_history(coeff_path, args.save)
+            plot_coeff_history(coeff_path, args.save,
+                               coeff_t_min=args.coeff_t_min)
         except Exception as e:
             print(f"Error plotting coefficients: {e}", file=sys.stderr)
             sys.exit(8)

@@ -163,6 +163,10 @@ python view_snapshot_viewer.py -k p --save pressure.png
 # Plot drag/lift coefficient histories
 python view_snapshot_viewer.py --plot-coeffs --save coeff_history.png
 
+# Coefficient plots trim startup by default (t >= 0.5).
+# Override if needed:
+python view_snapshot_viewer.py --plot-coeffs --coeff-t-min 0.25 --save coeff_history.png
+
 # Plot from a specific snapshot file
 python view_snapshot_viewer.py output/snap_005.0000.npz -k p --save plot.png
 ```
@@ -179,6 +183,7 @@ By default, plots are automatically saved to the `results/` directory in PNG for
 --plot-coeffs              Plot drag/lift coefficient histories
 --coeff-file FILE.csv      Coefficient CSV path (forces.csv/aero.csv)
 --coeff-indir DIR          Directory searched for coefficient CSVs (default: output)
+--coeff-t-min FLOAT        Minimum time for coefficient plots (default: 0.5)
 --save FILE                Save plot to file (saves to results/ folder)
 ```
 

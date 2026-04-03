@@ -164,13 +164,19 @@ def _estimate_scales(
             "Please provide snapshots written by main.py with metadata."
         )
 
+    config = _read_config(config_path) if config_path else {}
+    cfg_length_scale = config.get("aero_length_scale", None)
+    cfg_use_cyl_d = bool(config.get("aero_use_cylinder_diameter", 0.0))
+
     if length_scale is not None:
         l_char = float(length_scale)
+    elif cfg_length_scale is not None and float(cfg_length_scale) > 0.0:
+        l_char = float(cfg_length_scale)
     elif use_cylinder_diameter:
         l_char = float(ly / 4.0)
+    elif cfg_use_cyl_d:
+        l_char = float(ly / 4.0)
     else:
-        config = _read_config(config_path) if config_path else {}
-
         if 'cylinder' in config and config['cylinder'] != 0:
             cylinder_radius = config.get('cylinder_radius', ly / 8.0)
             if cylinder_radius <= 0:
@@ -490,7 +496,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--u-ref", type=float, default=1.0,
                         help="Reference velocity U (default: 1.0)")
     parser.add_argument("--length-scale", type=float, default=None,
-                        help="Characteristic length L (default: read from config or 1.0)")
+                        help="Characteristic length L (overrides config; default: read from config or 1.0)")
     parser.add_argument("--use-cylinder-diameter", action="store_true",
                         help="Use L = ly/4 (diameter for default cylinder setup)")
     parser.add_argument("--cylinder-radius", type=float, default=None,
