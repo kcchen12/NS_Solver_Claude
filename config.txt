@@ -22,7 +22,11 @@ bc_top = farfield
 
 # Inflow/farfield velocity components
 inflow_u = 1.0
-inflow_v = 0.001
+inflow_v = 0.0
+# One-time startup perturbation added to interior v as a percent of inflow_u.
+# Example: 2.0 gives an initial dv = 0.02 * inflow_u while keeping boundary
+# conditions controlled by inflow_v.
+initial_v_perturbation_pct = 2.0
 inflow_w = 0.0
 
 # Wall behavior (used where face type is 'wall')
@@ -47,6 +51,10 @@ outdir = output
 
 # Features (true/false)
 cylinder = true
+# Optional cylinder center in physical units.
+# If omitted, analyze_aerodynamics.py assumes (lx/4, ly/2).
+# cylinder_center_x = 1.0
+# cylinder_center_y = 1.0
 # Cylinder radius in physical units (set > 0 to override default ly/8)
 cylinder_radius = 0.5
 # If true, re is interpreted as Re_D based on cylinder diameter

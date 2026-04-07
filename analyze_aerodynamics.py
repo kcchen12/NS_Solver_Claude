@@ -150,6 +150,17 @@ def _resolve_cylinder_radius(config: Dict[str, float], ly: float) -> float:
     return radius if radius > 0.0 else float(ly / 8.0)
 
 
+def _resolve_cylinder_center(
+    config: Dict[str, float],
+    lx: float,
+    ly: float,
+) -> Tuple[float, float]:
+    """Resolve cylinder center from config with solver-default fallback."""
+    center_x = float(config.get("cylinder_center_x", lx / 4.0))
+    center_y = float(config.get("cylinder_center_y", ly / 2.0))
+    return center_x, center_y
+
+
 def _estimate_scales(
     first_path: str,
     length_scale: Optional[float],
@@ -192,15 +203,14 @@ def _estimate_cylinder_geometry(
 ) -> CylinderGeometry:
     """Estimate cylinder geometry from snapshot metadata and config."""
     _, _, lx, ly = _load_snapshot_grid_metadata(first_path)
+    config = _read_config(config_path) if config_path else {}
 
     if cylinder_radius is not None:
         r = float(cylinder_radius)
     else:
-        config = _read_config(config_path) if config_path else {}
         r = _resolve_cylinder_radius(config, ly)
 
-    center_x = float(lx / 4.0)
-    center_y = float(ly / 2.0)
+    center_x, center_y = _resolve_cylinder_center(config, lx, ly)
 
     return CylinderGeometry(
         center_x=center_x,

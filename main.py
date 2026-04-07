@@ -145,6 +145,9 @@ def parse_args():
     p.add_argument("--inflow-v", type=float,
                    default=cfg.get("inflow_v", 0.0, float),
                    help="Inflow/farfield y-velocity component")
+    p.add_argument("--initial-v-perturbation-pct", type=float,
+                   default=cfg.get("initial_v_perturbation_pct", 0.0, float),
+                   help="One-time initial y-velocity perturbation as a percent of inflow_u")
     p.add_argument("--inflow-w", type=float,
                    default=cfg.get("inflow_w", 0.0, float),
                    help="Inflow/farfield z-velocity component for 3-D")
@@ -247,8 +250,20 @@ def run(args):
         print(
             f"  Re interpretation: Re_D={args.re} with D={d_cyl:.4f} -> nu={nu:.6g}")
 
+    initial_v_perturbation = 0.01 * \
+        args.initial_v_perturbation_pct * bc.u_inf
     solver = FractionalStepSolver(grid, bc, nu, ibm=ibm)
-    solver.init_fields(u0=bc.u_inf, v0=bc.v_inf)
+    solver.init_fields(
+        u0=bc.u_inf,
+        v0=bc.v_inf,
+        initial_v_perturbation=initial_v_perturbation,
+    )
+    if is_root and args.verbose and args.initial_v_perturbation_pct != 0.0:
+        print(
+            "  Initial v perturbation: "
+            f"{args.initial_v_perturbation_pct:.3g}% of inflow_u "
+            f"-> dv={initial_v_perturbation:.6g}"
+        )
 
     # ------------------------------------------------------------------
     # Output directory

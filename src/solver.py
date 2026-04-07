@@ -86,11 +86,18 @@ class FractionalStepSolver:
     # ------------------------------------------------------------------
 
     def init_fields(self, u0: float = 1.0, v0: float = 0.0,
-                    p0: float = 0.0) -> None:
-        """Initialise all fields to uniform values."""
+                    p0: float = 0.0,
+                    initial_v_perturbation: float = 0.0) -> None:
+        """Initialise all fields to uniform values.
+
+        ``initial_v_perturbation`` adds a one-time offset to the interior
+        y-velocity field before boundary conditions are enforced.
+        """
         self.u[:] = u0
         self.v[:] = v0
         self.p[:] = p0
+        if initial_v_perturbation != 0.0:
+            self.v[:, 1:-1] += initial_v_perturbation
         # Enforce BCs on initial state
         apply_velocity_bc(self.u, self.v, self.grid, self.bc)
         self.t = 0.0
