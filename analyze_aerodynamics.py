@@ -2,9 +2,9 @@
 """Comprehensive aerodynamic analysis from snapshot data.
 
 This script combines Strouhal number and drag/lift coefficient analysis.
-It extracts a point probe signal for frequency analysis and computes forces
-on an immersed boundary object (e.g., cylinder), providing complete aerodynamic
-metrics in one unified report.
+It computes force-based drag/lift histories from snapshots and estimates
+Strouhal number from the lift-coefficient signal. Optional point-probe
+sampling is retained for CSV export and inspection.
 
 Outputs:
     - Time series CSV with probe values, forces, and coefficients
@@ -32,23 +32,6 @@ class SpectralResult:
     freq: float
     peak_power: float
     st: float
-
-
-@dataclass
-class ForceResult:
-    time: float
-    f_x: float
-    f_y: float
-    c_d: float
-    c_l: float
-
-
-@dataclass
-class ProbePoint:
-    time: float
-    u: float
-    v: float
-    p: float
 
 
 @dataclass(frozen=True)
@@ -111,6 +94,24 @@ def _safe_scalar(data: np.lib.npyio.NpzFile, key: str) -> Optional[float]:
     return float(np.array(data[key]).item())
 
 
+def _load_snapshot_grid_metadata(first_path: str) -> Tuple[int, int, float, float]:
+    """Read grid dimensions and domain size from one snapshot."""
+    with np.load(first_path) as data:
+        p = data["p"]
+        nx = int(p.shape[0])
+        ny = int(p.shape[1])
+        lx = _safe_scalar(data, "meta_lx")
+        ly = _safe_scalar(data, "meta_ly")
+
+    if lx is None or ly is None:
+        raise ValueError(
+            "Snapshot metadata does not include meta_lx/meta_ly. "
+            "Please provide snapshots written by main.py with metadata."
+        )
+
+    return nx, ny, float(lx), float(ly)
+
+
 def _read_config(config_path: str) -> Dict[str, float]:
     """Parse config file and return dictionary of key-value pairs."""
     config = {}
@@ -143,6 +144,12 @@ def _read_config(config_path: str) -> Dict[str, float]:
     return config
 
 
+def _resolve_cylinder_radius(config: Dict[str, float], ly: float) -> float:
+    """Resolve cylinder radius from config with a positive fallback."""
+    radius = float(config.get("cylinder_radius", ly / 8.0))
+    return radius if radius > 0.0 else float(ly / 8.0)
+
+
 def _estimate_scales(
     first_path: str,
     length_scale: Optional[float],
@@ -151,36 +158,21 @@ def _estimate_scales(
     config_path: Optional[str] = None,
 ) -> Tuple[float, float, int, int, float, float]:
     """Read metadata and return (L, U, nx, ny, lx, ly)."""
-    with np.load(first_path) as data:
-        p = data["p"]
-        nx = int(p.shape[0])
-        ny = int(p.shape[1])
-        lx = _safe_scalar(data, "meta_lx")
-        ly = _safe_scalar(data, "meta_ly")
-
-    if lx is None or ly is None:
-        raise ValueError(
-            "Snapshot metadata does not include meta_lx/meta_ly. "
-            "Please provide snapshots written by main.py with metadata."
-        )
+    nx, ny, lx, ly = _load_snapshot_grid_metadata(first_path)
 
     config = _read_config(config_path) if config_path else {}
     cfg_length_scale = config.get("aero_length_scale", None)
     cfg_use_cyl_d = bool(config.get("aero_use_cylinder_diameter", 0.0))
+    cylinder_radius = _resolve_cylinder_radius(config, ly)
 
     if length_scale is not None:
         l_char = float(length_scale)
     elif cfg_length_scale is not None and float(cfg_length_scale) > 0.0:
         l_char = float(cfg_length_scale)
-    elif use_cylinder_diameter:
-        l_char = float(ly / 4.0)
-    elif cfg_use_cyl_d:
-        l_char = float(ly / 4.0)
+    elif use_cylinder_diameter or cfg_use_cyl_d:
+        l_char = 2.0 * cylinder_radius
     else:
-        if 'cylinder' in config and config['cylinder'] != 0:
-            cylinder_radius = config.get('cylinder_radius', ly / 8.0)
-            if cylinder_radius <= 0:
-                cylinder_radius = ly / 8.0
+        if "cylinder" in config and config["cylinder"] != 0:
             l_char = 2.0 * cylinder_radius
         else:
             l_char = 1.0
@@ -197,40 +189,24 @@ def _estimate_cylinder_geometry(
     first_path: str,
     config_path: Optional[str] = None,
     cylinder_radius: Optional[float] = None,
-) -> Tuple[int, int, float, float, CylinderGeometry]:
-    """Read metadata and return (nx, ny, lx, ly, cylinder_geometry)."""
-    with np.load(first_path) as data:
-        p = data["p"]
-        nx = int(p.shape[0])
-        ny = int(p.shape[1])
-        lx = _safe_scalar(data, "meta_lx")
-        ly = _safe_scalar(data, "meta_ly")
-
-    if lx is None or ly is None:
-        raise ValueError(
-            "Snapshot metadata does not include meta_lx/meta_ly. "
-            "Please provide snapshots written by main.py with metadata."
-        )
+) -> CylinderGeometry:
+    """Estimate cylinder geometry from snapshot metadata and config."""
+    _, _, lx, ly = _load_snapshot_grid_metadata(first_path)
 
     if cylinder_radius is not None:
         r = float(cylinder_radius)
     else:
         config = _read_config(config_path) if config_path else {}
-        if 'cylinder_radius' in config:
-            r = float(config['cylinder_radius'])
-        else:
-            r = float(ly / 8.0)
+        r = _resolve_cylinder_radius(config, ly)
 
-    center_x = float(lx / 2.0)
+    center_x = float(lx / 4.0)
     center_y = float(ly / 2.0)
 
-    geom = CylinderGeometry(
+    return CylinderGeometry(
         center_x=center_x,
         center_y=center_y,
         radius=r,
     )
-
-    return nx, ny, float(lx), float(ly), geom
 
 
 def _build_bilinear_plan(
@@ -278,8 +254,8 @@ def _extract_probe_series(
     ny: int,
     lx: float,
     ly: float,
-    probe_x: float,
-    probe_y: float,
+    probe_x: Optional[float],
+    probe_y: Optional[float],
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Return arrays: t, u_probe, v_probe, p_probe."""
     snapshots_list = list(snapshots)
@@ -440,13 +416,13 @@ def _extract_combined_series(
     ny: int,
     lx: float,
     ly: float,
-    probe_x: float,
-    probe_y: float,
+    probe_x: Optional[float],
+    probe_y: Optional[float],
     geom: CylinderGeometry,
     u_ref: float,
     char_length: float,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Extract probe series and forces for all snapshots.
+    """Extract optional probe series and force/coefficient histories.
 
     Returns:
         (t, u_probe, v_probe, p_probe, f_x, f_y, c_d, c_l)
@@ -489,16 +465,16 @@ def parse_args() -> argparse.Namespace:
                         help="Configuration file (default: config.txt)")
 
     parser.add_argument("--probe-x", type=float, default=None,
-                        help="Optional probe x coordinate in physical units")
+                        help="Optional probe x coordinate in physical units for CSV export")
     parser.add_argument("--probe-y", type=float, default=None,
-                        help="Optional probe y coordinate in physical units")
+                        help="Optional probe y coordinate in physical units for CSV export")
 
     parser.add_argument("--u-ref", type=float, default=1.0,
                         help="Reference velocity U (default: 1.0)")
     parser.add_argument("--length-scale", type=float, default=None,
                         help="Characteristic length L (overrides config; default: read from config or 1.0)")
     parser.add_argument("--use-cylinder-diameter", action="store_true",
-                        help="Use L = ly/4 (diameter for default cylinder setup)")
+                        help="Use L = 2*cylinder_radius from config (or ly/4 if radius is default)")
     parser.add_argument("--cylinder-radius", type=float, default=None,
                         help="Cylinder radius (default: read from config or ly/8)")
 
@@ -540,7 +516,7 @@ def main() -> int:
     )
 
     # Estimate cylinder geometry
-    _, _, _, _, geom = _estimate_cylinder_geometry(
+    geom = _estimate_cylinder_geometry(
         snapshots[0][1],
         config_path=args.config,
         cylinder_radius=args.cylinder_radius,
