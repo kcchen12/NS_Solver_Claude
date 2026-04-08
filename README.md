@@ -2,6 +2,15 @@
 
 A 2D incompressible Navier-Stokes solver for modeling fluid flow around objects in a box domain.
 
+## Documentation
+
+Additional project notes are organized under [docs/](docs/README.md):
+
+- [Documentation index](docs/README.md)
+- [Branch experiment report](docs/reports/BRANCH_EXPERIMENT_REPORT.md)
+- [Optimization notes](docs/reports/OPTIMIZATION_NOTES.md)
+- [Mathematical formulas](docs/math/MATHEMATICAL_FORMULAS.md)
+
 ## Methods and Capabilities
 
 The solver uses the following methods and has the following capabilities:

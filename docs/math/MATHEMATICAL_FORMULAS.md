@@ -11,9 +11,11 @@ $$
 $$
 
 $$
+\begin{aligned}
 \frac{\partial \mathbf{u}}{\partial t}
 + (\mathbf{u} \cdot \nabla)\mathbf{u}
 = -\nabla p + \nu \nabla^2 \mathbf{u}
+\end{aligned}
 $$
 
 where
