@@ -46,6 +46,10 @@ outdir = output
 
 # Features (true/false)
 cylinder = true
+# Optional cylinder center in physical units.
+# If omitted, defaults to (lx/4, ly/2).
+# cylinder_center_x = 1.0
+# cylinder_center_y = 1.0
 # Cylinder radius in physical units (set > 0 to override default ly/8)
 cylinder_radius = 0.5
 # If true, re is interpreted as Re_D based on cylinder diameter

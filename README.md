@@ -86,6 +86,8 @@ All arguments are optional and override values in `config.txt`:
 --save_dt FLOAT    Time interval between snapshots (default: from config)
 --outdir DIR       Output directory for snapshots (default: from config)
 --cylinder BOOL    Enable immersed-boundary cylinder (default: from config)
+--cylinder-center-x FLOAT   Cylinder center x coordinate (default: from config or lx/4)
+--cylinder-center-y FLOAT   Cylinder center y coordinate (default: from config or ly/2)
 --plot BOOL        Show plots after simulation (default: from config)
 ```
 
@@ -123,6 +125,7 @@ Configuration is specified in `config.txt`. See `config_example.txt` for a compl
 
 ### Features
 - **cylinder** - Enable immersed-boundary cylinder at domain center (default: false)
+- **cylinder_center_x, cylinder_center_y** - Optional cylinder center coordinates; defaults to $(lx/4, ly/2)$
 - **plot** - Display matplotlib plots at end of simulation (default: false)
 - **verbose** - Print diagnostic information during run (default: true)
 

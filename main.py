@@ -118,6 +118,12 @@ def parse_args():
     p.add_argument("--cylinder-radius", type=float,
                    default=cfg.get("cylinder_radius", -1.0, float),
                    help="Cylinder radius in physical units (<=0 uses default ly/8)")
+    p.add_argument("--cylinder-center-x", type=float,
+                   default=cfg.get("cylinder_center_x", -1.0, float),
+                   help="Cylinder center x-coordinate in physical units (<0 uses default lx/4)")
+    p.add_argument("--cylinder-center-y", type=float,
+                   default=cfg.get("cylinder_center_y", -1.0, float),
+                   help="Cylinder center y-coordinate in physical units (<0 uses default ly/2)")
     p.add_argument("--re-is-cylinder-based", type=str_to_bool,
                    default=cfg.get("re_is_cylinder_based", True, bool),
                    help="Interpret --re as Re_D based on cylinder diameter when cylinder is enabled")
@@ -229,8 +235,8 @@ def run(args):
     ibm = ImmersedBoundary(grid)
     r = None
     if args.cylinder:
-        cx = args.lx / 4.0        # cylinder centre x
-        cy = args.ly / 2.0        # cylinder centre y
+        cx = args.cylinder_center_x if args.cylinder_center_x >= 0.0 else args.lx / 4.0
+        cy = args.cylinder_center_y if args.cylinder_center_y >= 0.0 else args.ly / 2.0
         r = args.cylinder_radius if args.cylinder_radius > 0.0 else args.ly / 8.0
         ibm.add_circle(cx, cy, r)
         if is_root and args.verbose:

@@ -3,12 +3,12 @@
 # Format: key = value
 
 # Grid parameters
-nx = 128
-ny = 64
+nx = 320
+ny = 128
 
 # Domain dimensions
-lx = 4.0
-ly = 2.0
+lx = 25.0
+ly = 10.0
 
 # Physics parameters
 re = 100.0
@@ -52,9 +52,10 @@ outdir = output
 # Features (true/false)
 cylinder = true
 # Optional cylinder center in physical units.
-# If omitted, analyze_aerodynamics.py assumes (lx/4, ly/2).
-# cylinder_center_x = 1.0
-# cylinder_center_y = 1.0
+# For a more benchmark-like Re_D=100 case, keep the cylinder well away
+# from the inlet/outlet and use a low blockage ratio.
+cylinder_center_x = 8.0
+cylinder_center_y = 5.0
 # Cylinder radius in physical units (set > 0 to override default ly/8)
 cylinder_radius = 0.5
 # If true, re is interpreted as Re_D based on cylinder diameter
