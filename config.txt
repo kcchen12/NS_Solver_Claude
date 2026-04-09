@@ -3,12 +3,12 @@
 # Format: key = value
 
 # Grid parameters
-nx = 160
-ny = 64
+nx = 320
+ny = 128
 
 # Domain dimensions
-lx = 12.5
-ly = 5.0
+lx = 25.0
+ly = 10.0
 
 # Physics parameters
 re = 100.0
@@ -23,9 +23,6 @@ bc_top = farfield
 # Inflow/farfield velocity components
 inflow_u = 1.0
 inflow_v = 0.0
-# One-time startup perturbation added to interior v as a percent of inflow_u.
-# Example: 2.0 gives an initial dv = 0.02 * inflow_u while keeping boundary
-# conditions controlled by inflow_v.
 initial_v_perturbation_pct = 2.0
 inflow_w = 0.0
 
@@ -42,24 +39,19 @@ outflow_mode = convective
 outflow_speed = 1.0
 
 # Time integration
-t_end = 1
+t_end = 100.0
 cfl = .5
 
 # I/O parameters
-save_dt = 1.0
-# Grid metadata is written to outdir/uniform_grid.npz by pre_generate_grid.py
-# and also at main.py startup.
+save_dt = 0.02
 outdir = output
 # Unified grid controls (used by both main.py and pre_generate_grid.py)
-# uniform_grid = true  -> uniform mesh
-# uniform_grid = false -> nonuniform mesh
 uniform_grid = false
-# Nonuniform density controls (smooth center-density boost)
+# Nonuniform density controls (smooth center-density boost,)
 # Set <=0 in a direction to make that direction uniform.
 grid_beta_x = 2.0
 grid_beta_y = 2.0
 # Fraction of each domain direction covered by the refined center band.
-# Example: 0.333333 refines the middle third.
 grid_band_fraction_x = 0.333333
 grid_band_fraction_y = 0.333333
 # Runtime nonuniform mode (center-band)
@@ -67,9 +59,6 @@ runtime_nonuniform_mode = center-band
 
 # Features (true/false)
 cylinder = true
-# Optional cylinder center in physical units.
-# For a more benchmark-like Re_D=100 case, keep the cylinder well away
-# from the inlet/outlet and use a low blockage ratio.
 cylinder_center_x = 4.0
 cylinder_center_y = 2.5
 # Cylinder radius in physical units (set > 0 to override default ly/8)

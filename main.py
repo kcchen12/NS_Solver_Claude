@@ -55,6 +55,8 @@ from src.io_utils import (
 )
 from src.parallel import ParallelDecomposition
 from src.config import ConfigParser
+from analyze_aerodynamics import run_analysis as run_aero_analysis
+from view_snapshot_viewer import find_latest_snapshot, plot_coeff_history, plot_snapshot_key
 
 
 def _normalize_bc_type(raw_value: str, default: str) -> str:
@@ -92,14 +94,18 @@ def parse_args():
     default_config = os.path.join(script_dir, "config.txt")
     default_outdir = os.path.join(script_dir, "output")
 
-    # First parse just the config file path
+    # First parse just the config file paths
     p_pre = argparse.ArgumentParser(add_help=False)
     p_pre.add_argument("--config", type=str, default=default_config,
                        help="Path to configuration file")
+    p_pre.add_argument("--post-config", type=str,
+                       default=os.path.join(script_dir, "post_config.txt"),
+                       help="Path to post-processing configuration file")
     args_pre, remaining = p_pre.parse_known_args()
 
-    # Read config file
+    # Read config files
     cfg = ConfigParser(args_pre.config)
+    post_cfg = ConfigParser(args_pre.post_config)
 
     # Unified grid controls from config.txt.
     # Backward compatibility:
@@ -133,6 +139,8 @@ def parse_args():
     p = argparse.ArgumentParser(description="2-D Navier-Stokes solver")
     p.add_argument("--config", type=str, default=default_config,
                    help="Path to configuration file")
+    p.add_argument("--post-config", type=str, default=args_pre.post_config,
+                   help="Path to post-processing configuration file")
     p.add_argument("--nx",       type=int,   default=cfg.get("nx", 64, int))
     p.add_argument("--ny",       type=int,   default=cfg.get("ny", 32, int))
     p.add_argument("--lx",       type=float, default=cfg.get("lx", 4.0, float))
@@ -180,8 +188,23 @@ def parse_args():
     p.add_argument("--plot",     type=str_to_bool, default=cfg.get("plot", False, bool),
                    help="Show matplotlib plots after simulation")
     p.add_argument("--plot-grid", type=str_to_bool,
-                   default=cfg.get("plot_grid", False, bool),
+                   default=post_cfg.get("plot_grid", False, bool),
                    help="Save a physical grid plot showing mesh concentration")
+    p.add_argument("--auto-generate-grid-spacing", type=str_to_bool,
+                   default=post_cfg.get("auto_generate_grid_spacing", False, bool),
+                   help="Automatically save the grid spacing/concentration figure after the run")
+    p.add_argument("--auto-generate-coeff-history", type=str_to_bool,
+                   default=post_cfg.get("auto_generate_coeff_history", False, bool),
+                   help="Automatically save the drag/lift coefficient history figure after the run")
+    p.add_argument("--auto-generate-aero-report", type=str_to_bool,
+                   default=post_cfg.get("auto_generate_aero_report", False, bool),
+                   help="Automatically save the aerodynamic report after the run")
+    p.add_argument("--auto-generate-velocity-u", type=str_to_bool,
+                   default=post_cfg.get("auto_generate_velocity_u", False, bool),
+                   help="Automatically save a plot of the latest u-velocity snapshot")
+    p.add_argument("--auto-generate-velocity-v", type=str_to_bool,
+                   default=post_cfg.get("auto_generate_velocity_v", False, bool),
+                   help="Automatically save a plot of the latest v-velocity snapshot")
     p.add_argument("--verbose",  type=str_to_bool, default=cfg.get("verbose", True, bool),
                    help="Print periodic diagnostics during the time loop")
 
@@ -225,6 +248,12 @@ def parse_args():
     p.add_argument("--outflow-speed", type=float,
                    default=cfg.get("outflow_speed", 1.0, float),
                    help="Convective outflow wave speed")
+    p.add_argument("--auto-coeff-t-min", type=float,
+                   default=post_cfg.get("auto_coeff_t_min", 0.5, float),
+                   help="Minimum time used when auto-generating coefficient history")
+    p.add_argument("--auto-aero-t-min", type=float,
+                   default=post_cfg.get("auto_aero_t_min", 1.0, float),
+                   help="Minimum time used when auto-generating aerodynamic analysis")
     return p.parse_args()
 
 
@@ -481,6 +510,9 @@ def run(args, grid=None, grid_loaded_from_file=False):
     if is_root and args.verbose:
         print(f"\n  Done.  t_final={solver.t:.4f},  steps={step_count}")
 
+    if is_root:
+        _run_auto_outputs(grid, args)
+
     # ------------------------------------------------------------------
     # Optional plot
     # ------------------------------------------------------------------
@@ -684,6 +716,63 @@ def _plot_grid(grid, args):
     fig.savefig(plot_path, dpi=180)
     print(f"  Grid plot saved to {plot_path}")
     plt.close(fig)
+
+
+def _run_auto_outputs(grid, args):
+    results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
+    os.makedirs(results_dir, exist_ok=True)
+
+    if args.auto_generate_grid_spacing:
+        _plot_grid(grid, args)
+
+    need_aero_series = args.auto_generate_coeff_history or args.auto_generate_aero_report
+    aero_series_path = os.path.join(results_dir, "aero.csv")
+    aero_report_path = os.path.join(results_dir, "aero_report.txt")
+
+    if need_aero_series:
+        status = run_aero_analysis(
+            indir=args.outdir,
+            pattern="snap_*.npz",
+            config=args.config,
+            u_ref=args.inflow_u,
+            use_cylinder_diameter=bool(args.re_is_cylinder_based and args.cylinder),
+            t_min=args.auto_aero_t_min,
+            save_series=aero_series_path,
+            save_report=aero_report_path if args.auto_generate_aero_report else None,
+        )
+        if status != 0:
+            print("  Warning: automatic aerodynamic post-processing failed.")
+            return
+
+    if args.auto_generate_coeff_history:
+        coeff_history_name = "coeff_history.png"
+        try:
+            plot_coeff_history(
+                aero_series_path,
+                save_name=coeff_history_name,
+                coeff_t_min=args.auto_coeff_t_min,
+            )
+        except Exception as exc:
+            print(f"  Warning: automatic coefficient-history plot failed: {exc}")
+
+    latest_snapshot = None
+    if args.auto_generate_velocity_u or args.auto_generate_velocity_v:
+        latest_snapshot = find_latest_snapshot(dirpath=args.outdir)
+        if latest_snapshot is None:
+            print("  Warning: automatic velocity plots skipped because no snapshots were found.")
+            return
+
+    if args.auto_generate_velocity_u:
+        try:
+            plot_snapshot_key(latest_snapshot, "u", save_name="velocity_u.png")
+        except Exception as exc:
+            print(f"  Warning: automatic u-velocity plot failed: {exc}")
+
+    if args.auto_generate_velocity_v:
+        try:
+            plot_snapshot_key(latest_snapshot, "v", save_name="velocity_v.png")
+        except Exception as exc:
+            print(f"  Warning: automatic v-velocity plot failed: {exc}")
 
 
 # ---------------------------------------------------------------------------

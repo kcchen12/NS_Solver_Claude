@@ -1,314 +1,289 @@
 # NS_Solver
 
-A 2D incompressible Navier-Stokes solver for modeling fluid flow around objects in a box domain.
+`NS_Solver` is a 2-D incompressible Navier-Stokes solver for box-domain flow. It uses a staggered MAC grid, configurable boundary conditions, optional immersed-boundary cylinder geometry, nonuniform center-focused meshes, MPI decomposition in `y`, and lightweight post-processing helpers.
 
-## Documentation
+## Overview
 
-Additional project notes are organized under [docs/](docs/README.md):
+- Solves incompressible flow with a fractional-step / projection method
+- Uses SSP-RK3 time integration
+- Uses a staggered Cartesian finite-volume layout
+- Supports configurable `inflow`, `farfield`, `outflow`, `wall`, and `periodic` boundaries
+- Supports optional immersed-boundary cylinder cases
+- Supports uniform and nonuniform 2-D grids
+- Can generate grid-spacing plots, coefficient-history plots, and aerodynamic reports after a run
 
-- [Documentation index](docs/README.md)
-- [Branch experiment report](docs/reports/BRANCH_EXPERIMENT_REPORT.md)
-- [Optimization notes](docs/reports/OPTIMIZATION_NOTES.md)
-- [Mathematical formulas](docs/math/MATHEMATICAL_FORMULAS.md)
+Additional notes live in [docs/README.md](docs/README.md).
 
-## Methods and Capabilities
+## Repo Files
 
-The solver uses the following methods and has the following capabilities:
+- [main.py](/Users/Carolyn/Desktop/NS_Solver_Claude/main.py): main solver entry point
+- [config.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/config.txt): run configuration
+- [post_config.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/post_config.txt): post-processing configuration
+- [pre_generate_grid.py](/Users/Carolyn/Desktop/NS_Solver_Claude/pre_generate_grid.py): standalone prepared-grid generator
+- [analyze_aerodynamics.py](/Users/Carolyn/Desktop/NS_Solver_Claude/analyze_aerodynamics.py): aerodynamic coefficient and Strouhal-style analysis
+- [view_snapshot_viewer.py](/Users/Carolyn/Desktop/NS_Solver_Claude/view_snapshot_viewer.py): snapshot and coefficient-history plotting
 
-1. **Parallel Computing** - Supports MPI for running on Linux clusters
-2. **Finite Volume Method** - 2D spatial discretization on a staggered Cartesian grid
-3. **Time Integration** - 3rd Order Strong Stability Preserving Runge-Kutta (SSP-RK3)
-4. **Pressure-Velocity Coupling** - Fractional-step (projection) method
-5. **Boundary Conditions** - Configurable per-face inflow/farfield/outflow/wall/periodic, with selectable wall slip/penetration and outflow mode
-6. **Immersed Boundary Method (IBM)** - Support for arbitrary geometries (e.g., cylinders)
-7. **Extensible to 3D** - Core algorithms support extension to 3D
+## Quick Start
 
-## Installation
+Typical setup:
 
-### Requirements
-- Python 3.7+
-- Dependencies listed in `requirements.txt`:
-  - numpy
-  - scipy
-  - mpi4py (for parallel runs)
-  - matplotlib (for visualization)
-  - h5py
-  - pytest
-
-### Setup
-
-1. Create and activate a virtual environment:
 ```bash
 python -m venv .venv
-.venv\Scripts\activate  # Windows
-# or
-source .venv/bin/activate  # Linux/Mac
-```
-
-2. Install dependencies:
-```bash
+.venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-## Usage
-
-### Running the Solver
-
-Run the solver with default configuration:
-```bash
-cd NS_Solver
 python main.py
 ```
 
-Run the solver on a non-uniform grid focused around the cylinder location:
+Use an explicit run config and post config:
+
 ```bash
-python main.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0 --band-fraction-x 0.33 --band-fraction-y 0.33
+python main.py --config config.txt --post-config post_config.txt
 ```
 
-Pre-generate prepared grid metadata without running the solver:
-```bash
-python pre_generate_grid.py
-```
+Run in parallel:
 
-Generate non-uniform prepared-grid metadata focused around the cylinder location:
-```bash
-python pre_generate_grid.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0 --band-fraction-x 0.33 --band-fraction-y 0.33
-```
-
-Override config parameters from the command line:
-```bash
-python main.py --nx 128 --ny 64 --re 200 --cylinder true
-```
-
-Run in parallel (4 MPI processes):
 ```bash
 mpirun -n 4 python main.py
 ```
 
-### Command-Line Arguments
+## Setup
 
-All arguments are optional and override values in `config.txt`:
+Requirements:
 
+- Python 3
+- `numpy`
+- `scipy`
+- `matplotlib`
+- `h5py`
+- `pytest`
+- `mpi4py` if you want MPI runs
+
+## Config Files
+
+The project now uses two config files on purpose:
+
+- [config.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/config.txt): how the simulation runs
+- [post_config.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/post_config.txt): which derived plots/reports get generated after the run
+
+Examples are provided in [config_example.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/docs/examples/config_example.txt) and [post_config_example.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/docs/examples/post_config_example.txt).
+
+### Run Config
+
+Core grid and physics:
+
+- `nx`, `ny`: cell counts
+- `lx`, `ly`: domain size
+- `re`: Reynolds number
+- `t_end`: end time
+- `cfl`: target CFL
+- `save_dt`: snapshot interval
+- `outdir`: snapshot/grid output directory
+
+Grid control:
+
+- `uniform_grid`: `true` for uniform, `false` for nonuniform
+- `grid_beta_x`, `grid_beta_y`: smooth center-density boost in each direction
+- `grid_band_fraction_x`, `grid_band_fraction_y`: fraction of the domain refined around the center band
+
+Boundary conditions:
+
+- `bc_left`, `bc_right`, `bc_bottom`, `bc_top`
+- `inflow_u`, `inflow_v`, `inflow_w`
+- `wall_slip_mode`
+- `wall_penetration`
+- `wall_normal_velocity`
+- `outflow_mode`
+- `outflow_speed`
+
+Cylinder / immersed boundary:
+
+- `cylinder`
+- `cylinder_center_x`, `cylinder_center_y`
+- `cylinder_radius`
+- `re_is_cylinder_based`
+
+Initialization and runtime plotting:
+
+- `initial_v_perturbation_pct`: one-time startup perturbation applied to interior `v` as a percent of `inflow_u`
+- `plot`: save the standard end-of-run result figure
+- `verbose`: print run diagnostics
+
+### Post Config
+
+- `plot_grid`: save the grid-spacing/concentration figure
+- `auto_generate_grid_spacing`: automatically generate `results/grid.png`
+- `auto_generate_velocity_u`: automatically generate `results/velocity_u.png`
+- `auto_generate_velocity_v`: automatically generate `results/velocity_v.png`
+- `auto_generate_coeff_history`: automatically generate `results/coeff_history.png`
+- `auto_generate_aero_report`: automatically generate `results/aero_report.txt`
+- `auto_coeff_t_min`: minimum time for automatic coefficient-history plotting
+- `auto_aero_t_min`: minimum time for automatic aerodynamic analysis
+
+## Runtime Notes
+
+### Initial Perturbation
+
+`initial_v_perturbation_pct` is easy to miss but useful for wake development studies and vortex-shedding startup tests.
+
+If:
+
+- `inflow_u = 1.0`
+- `initial_v_perturbation_pct = 2.0`
+
+then the solver applies a one-time interior perturbation of:
+
+```text
+dv = 0.02 * inflow_u = 0.02
 ```
---config FILE       Path to configuration file (default: config.txt)
---nx INT           Grid cells in x direction (default: from config)
---ny INT           Grid cells in y direction (default: from config)
---lx FLOAT         Domain length in x (default: from config)
---ly FLOAT         Domain length in y (default: from config)
---re FLOAT         Reynolds number (default: from config)
---t_end FLOAT      Simulation end time (default: from config)
---cfl FLOAT        CFL number for time stepping (default: from config)
---save_dt FLOAT    Time interval between snapshots (default: from config)
---outdir DIR       Output directory for snapshots (default: from config)
---grid-type STR    Runtime grid type: uniform or nonuniform (default: from config)
---beta-x FLOAT     Nonuniform x-stretch beta (default: from config)
---beta-y FLOAT     Nonuniform y-stretch beta (default: from config)
---band-fraction-x FLOAT  Fraction of x refined in the center band (default: from config)
---band-fraction-y FLOAT  Fraction of y refined in the center band (default: from config)
---cylinder BOOL    Enable immersed-boundary cylinder (default: from config)
---cylinder-center-x FLOAT   Cylinder center x coordinate (default: from config or lx/4)
---cylinder-center-y FLOAT   Cylinder center y coordinate (default: from config or ly/2)
---plot BOOL        Show plots after simulation (default: from config)
-```
 
-## Configuration
+This does not permanently change the configured boundary condition values. It only seeds the initial interior field.
 
-Configuration is specified in `config.txt`. See `config_example.txt` for a complete example.
+### Nonuniform Grid
 
-### Grid Parameters
-- **nx** - Number of grid cells in x direction (default: 64)
-- **ny** - Number of grid cells in y direction (default: 32)
-- Run `python pre_generate_grid.py` to write the current uniform grid to `outdir/uniform_grid.npz`
+The current nonuniform grid is a center-band refinement, not a boundary-layer stretch.
 
-### Domain Dimensions
-- **lx** - Physical domain length in x direction (default: 4.0)
-- **ly** - Physical domain length in y direction (default: 2.0)
+- Outside the refined band, spacing stays close to normal uniform spacing
+- Inside the band, cell density increases smoothly toward the middle
+- `beta_x` and `beta_y` control how much denser the middle becomes
+- `band_fraction_x` and `band_fraction_y` control how wide that refined middle region is
 
-### Physics Parameters
-- **re** - Reynolds number ($Re = \frac{U_\infty L}{\nu}$). Higher values = less viscous flow (default: 100.0)
+Prepared grid metadata is saved automatically into `outdir` as either:
 
-### Boundary Conditions
-- **bc_left, bc_right, bc_bottom, bc_top** - Boundary type per face: `inflow`, `farfield`, `outflow`, `wall`, or `periodic`
-- **inflow_u, inflow_v, inflow_w** - Velocity components used for inflow/farfield boundaries
-- **wall_slip_mode** - Wall tangential behavior: `no-slip` or `free-slip`
-- **wall_penetration** - Enable/disable wall-normal penetration at wall boundaries (`true` or `false`)
-- **wall_normal_velocity** - Wall-normal velocity value used when `wall_penetration = true`
-- **outflow_mode** - Outflow update model: `convective` or `zero-gradient`
-- **outflow_speed** - Convective wave speed used by outflow boundaries in `convective` mode
+- `uniform_grid.npz`
+- `nonuniform_grid.npz`
 
-### Time Integration
-- **t_end** - Simulation end time (default: 5.0)
-- **cfl** - CFL number for adaptive time stepping (default: 0.4). Lower values = smaller time steps = more stability
+## Prepared Grid Generation
 
-### I/O Parameters
-- **save_dt** - Time interval between snapshot outputs (default: 0.5)
-- **outdir** - Directory where snapshots are saved (default: output)
-- **uniform_grid.npz** - Grid metadata file written into `outdir` by `pre_generate_grid.py` and at `main.py` startup
-
-### Pre-Generating The Grid
-
-To pre-generate the default uniform runtime grid metadata:
+Generate prepared grid metadata without running the full solve:
 
 ```bash
 python pre_generate_grid.py
 ```
 
-This uses the same `config.txt` and command-line overrides as `main.py`, then writes:
-
-```text
-outdir/uniform_grid.npz
-```
-
-To pre-generate non-uniform prepared-grid metadata for setup/post-processing workflows:
+Generate a nonuniform prepared grid:
 
 ```bash
-python pre_generate_grid.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0
+python pre_generate_grid.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0 --band-fraction-x 0.33 --band-fraction-y 0.33
 ```
 
-This writes:
+Common options:
+
+- `--nx`, `--ny`, `--lx`, `--ly`
+- `--grid-type uniform|nonuniform`
+- `--beta-x`, `--beta-y`
+- `--band-fraction-x`, `--band-fraction-y`
+- `--focus-x`, `--focus-y`
+- `--outdir`
+- `--output-name`
+
+## Outputs
+
+Common outputs:
+
+- `output/snap_*.npz`: solution snapshots
+- `output/uniform_grid.npz` or `output/nonuniform_grid.npz`: prepared grid metadata
+- `results/result.png`: standard flow plot from `main.py` when `plot = true`
+- `results/grid.png`: physical grid / spacing plot
+- `results/aero.csv`: coefficient and force history
+- `results/coeff_history.png`: drag/lift history figure
+- `results/aero_report.txt`: aerodynamic summary report
+
+## Post-Processing
+
+### Grid Spacing Plot
+
+Enable in [post_config.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/post_config.txt):
 
 ```text
-outdir/nonuniform_grid.npz
+plot_grid = true
+auto_generate_grid_spacing = true
 ```
 
-The runtime solver can now run on non-uniform 2-D grids by setting `--grid-type nonuniform` (or config equivalents). The refined region is a configurable center band in each direction via `grid_band_fraction_x/y` or `--band-fraction-x/y`.
+This produces `results/grid.png` with:
+
+- the physical grid
+- point concentration / cell density
+- spacing curves
+
+### Velocity Snapshots
+
+Enable in [post_config.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/post_config.txt):
+
+```text
+auto_generate_velocity_u = true
+auto_generate_velocity_v = true
+```
+
+These use the existing snapshot-viewer plotting path and save:
+
+- `results/velocity_u.png`
+- `results/velocity_v.png`
+
+### Coefficient History Plot
+
+Generate it manually from the viewer:
+
+```bash
+python view_snapshot_viewer.py --plot-coeffs --save coeff_history.png
+```
+
+Useful viewer options:
+
+- `--coeff-file`
+- `--coeff-indir`
+- `--coeff-t-min`
+- `--save`
+
+### Aerodynamic Analysis
+
+Run directly:
+
+```bash
+python analyze_aerodynamics.py --indir output --config config.txt --use-cylinder-diameter --t-min 1.0 --save-series results/aero.csv --save-report results/aero_report.txt
+```
+
+This script computes:
+
+- force histories
+- `C_d` and `C_l`
+- a dominant lift frequency / Strouhal-style estimate
+- summary statistics in a text report
+
+Useful analysis options:
+
+- `--indir`
+- `--pattern`
+- `--config`
+- `--probe-x`, `--probe-y`
+- `--u-ref`
+- `--length-scale`
+- `--use-cylinder-diameter`
+- `--cylinder-radius`
+- `--t-min`
+- `--f-min`, `--f-max`, `--n-freq`
+- `--save-series`
+- `--save-report`
+
+## Snapshot Viewer
 
 Examples:
 
 ```bash
-# Use grid settings from config.txt
-python pre_generate_grid.py
-
-# Override the grid and output directory
-python pre_generate_grid.py --nx 256 --ny 128 --lx 25.0 --ly 10.0 --outdir output
-
-# Build a non-uniform prepared grid in output/nonuniform_grid.npz
-python pre_generate_grid.py --grid-type nonuniform --beta-x 3.0 --beta-y 1.5
-```
-
-After that, run the solver normally:
-
-```bash
-python main.py
-```
-
-For the current uniform-grid solver, this is mainly a workflow/documentation improvement. It gives you a reusable grid metadata file, but by itself it does not meaningfully reduce solver runtime.
-
-### Features
-- **cylinder** - Enable immersed-boundary cylinder at domain center (default: false)
-- **cylinder_center_x, cylinder_center_y** - Optional cylinder center coordinates; defaults to $(lx/4, ly/2)$
-- **plot** - Display matplotlib plots at end of simulation (default: false)
-- **verbose** - Print diagnostic information during run (default: true)
-
-### Example: Quick Run
-```
-nx = 64
-ny = 32
-lx = 4.0
-ly = 2.0
-re = 100.0
-t_end = 5.0
-cfl = 0.4
-save_dt = 0.5
-outdir = output
-cylinder = false
-```
-
-### Example: High Resolution
-```
-nx = 256
-ny = 128
-lx = 4.0
-ly = 2.0
-re = 100.0
-t_end = 10.0
-cfl = 0.4
-save_dt = 1.0
-outdir = output
-cylinder = true
-```
-
-## Visualization
-
-Simulation outputs are saved as `.npz` files (NumPy compressed arrays) in the snapshot directory.
-
-### Generating Plots
-
-View snapshots and generate visualizations:
-
-```bash
-# List available variables in the latest snapshot
 python view_snapshot_viewer.py --list
-
-# Plot pressure field from latest snapshot
 python view_snapshot_viewer.py -k p --save pressure.png
-
-# Plot drag/lift coefficient histories
-python view_snapshot_viewer.py --plot-coeffs --save coeff_history.png
-
-# Coefficient plots trim startup by default (t >= 0.5).
-# Override if needed:
-python view_snapshot_viewer.py --plot-coeffs --coeff-t-min 0.25 --save coeff_history.png
-
-# Plot from a specific snapshot file
-python view_snapshot_viewer.py output/snap_005.0000.npz -k p --save plot.png
+python view_snapshot_viewer.py output/snap_005.0000.npz -k u --save velocity.png
 ```
 
-### Image Output
+Useful viewer options:
 
-By default, plots are automatically saved to the `results/` directory in PNG format at 150 DPI.
+- `-k`, `--key`
+- `-s`, `--slice`
+- `-c`, `--comp`
+- `--save`
+- `--plot-coeffs`
 
-### Viewer Options
-```
--k, --key KEY              Variable to plot (u, v, p, etc.)
--s, --slice IDX            Slice index for 3D arrays
--c, --comp IDX             Component index for vector fields
---plot-coeffs              Plot drag/lift coefficient histories
---coeff-file FILE.csv      Coefficient CSV path (forces.csv/aero.csv)
---coeff-indir DIR          Directory searched for coefficient CSVs (default: output)
---coeff-t-min FLOAT        Minimum time for coefficient plots (default: 0.5)
---save FILE                Save plot to file (saves to results/ folder)
-```
+## Notes
 
-## Strouhal Number Evaluation
-
-Use `evaluate_strouhal.py` to compute dominant frequencies from a point probe
-of `u`, `v`, and `p`, then convert to Strouhal number:
-
-$$
-St = \frac{fL}{U}
-$$
-
-### Example (Cylinder Case)
-
-For the default cylinder setup in `main.py`, the cylinder diameter is
-`D = ly/4`. You can use that directly as the characteristic length scale:
-
-```bash
-python evaluate_strouhal.py --probe-x 1.5 --probe-y 1.1 --use-cylinder-diameter --t-min 1.0
-```
-
-To also save a plain-text summary report (including Combined Strouhal):
-
-```bash
-python evaluate_strouhal.py --probe-x 1.5 --probe-y 1.1 --use-cylinder-diameter --t-min 1.0 --save-report results/strouhal_report.txt
-```
-
-### Strouhal Script Options
-
-```
---indir DIR                Snapshot directory (default: output)
---pattern GLOB             Snapshot filename pattern (default: snap_*.npz)
---probe-x FLOAT            Probe x coordinate (required)
---probe-y FLOAT            Probe y coordinate (required)
---u-ref FLOAT              Reference velocity U (default: 1.0)
---length-scale FLOAT       Characteristic length L (default: 1.0)
---use-cylinder-diameter    Use L = ly/4 (consistent with default cylinder)
---t-min FLOAT              Ignore data before this time (default: 1.0)
---f-min FLOAT              Min frequency for search (default: 0.05)
---f-max FLOAT              Max frequency for search (default: 2.0)
---n-freq INT               Number of frequency samples (default: 4000)
---save-series FILE.csv     Export probe time series as CSV
---save-report FILE.txt     Export Strouhal summary report as TXT
-```
-
+- The README now reflects the current split-config workflow
+- There is no `evaluate_strouhal.py` in this repo; use [analyze_aerodynamics.py](/Users/Carolyn/Desktop/NS_Solver_Claude/analyze_aerodynamics.py) for current frequency/report analysis
+- The local Python environment on this machine currently appears broken, so documentation changes were updated against the code but not executed end-to-end from this shell

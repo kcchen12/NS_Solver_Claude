@@ -1,0 +1,16 @@
+# NS_Solver Example Post-Processing Configuration File
+# Keeps reporting/visualization controls separate from the run setup.
+
+# Grid visualization
+plot_grid = false
+auto_generate_grid_spacing = true
+auto_generate_velocity_u = true
+auto_generate_velocity_v = true
+
+# Aerodynamic outputs
+auto_generate_coeff_history = true
+auto_generate_aero_report = true
+
+# Time trimming for post-processing
+auto_coeff_t_min = 0.5
+auto_aero_t_min = 1.0

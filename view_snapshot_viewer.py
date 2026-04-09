@@ -302,6 +302,43 @@ def pick_slice_and_component(arr: np.ndarray, slice_idx: Optional[int], comp_idx
     raise ValueError(f"Unsupported array shape: {arr.shape}")
 
 
+def plot_snapshot_key(
+    file_path: str,
+    key: str,
+    save_name: Optional[str] = None,
+    slice_idx: Optional[int] = None,
+    comp_idx: Optional[int] = None,
+) -> None:
+    """Plot one array key from a snapshot file."""
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    with np.load(file_path, allow_pickle=True) as data:
+        keys = list(data.keys())
+        if key not in keys:
+            raise KeyError(f"Key '{key}' not found. Available: {keys}")
+        arr = np.array(data[key])
+
+    img = pick_slice_and_component(arr, slice_idx, comp_idx)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    im = ax.imshow(img, origin="lower", cmap="viridis")
+    ax.set_title(f"{os.path.basename(file_path)} : {key}",
+                 fontsize=12, fontweight='bold')
+    fig.colorbar(im, ax=ax, label=key)
+    ax.set_xlabel('x', fontsize=10)
+    ax.set_ylabel('y', fontsize=10)
+
+    if save_name:
+        results_dir = ensure_results_dir()
+        save_path = os.path.join(results_dir, save_name)
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"Saved figure: {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="View .npz snapshot files with velocity visualization (matplotlib viewer)")
@@ -364,39 +401,19 @@ def main(argv=None):
         if not keys:
             print("No arrays found in file", file=sys.stderr)
             sys.exit(3)
-
-        # Choose which variable to plot
         key = args.key or keys[0]
-        if key not in keys:
-            print(f"Key '{key}' not found. Available: {keys}", file=sys.stderr)
-            sys.exit(4)
-        arr = np.array(data[key])
 
-    # Extract main variable to plot
     try:
-        img = pick_slice_and_component(arr, args.slice, args.comp)
+        plot_snapshot_key(
+            args.file,
+            key,
+            save_name=args.save,
+            slice_idx=args.slice,
+            comp_idx=args.comp,
+        )
     except Exception as e:
-        print(f"Error selecting slice/component: {e}", file=sys.stderr)
-        print("Available array shape:", arr.shape)
+        print(f"Error plotting snapshot key: {e}", file=sys.stderr)
         sys.exit(6)
-
-    # Plot
-    fig, ax = plt.subplots(figsize=(8, 6))
-    im = ax.imshow(img, origin="lower", cmap="viridis")
-    ax.set_title(f"{os.path.basename(args.file)} : {key}",
-                 fontsize=12, fontweight='bold')
-    fig.colorbar(im, ax=ax, label=key)
-
-    ax.set_xlabel('x', fontsize=10)
-    ax.set_ylabel('y', fontsize=10)
-
-    if args.save:
-        results_dir = ensure_results_dir()
-        save_path = os.path.join(results_dir, args.save)
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        print(f"Saved figure: {save_path}")
-    else:
-        plt.show()
 
 
 if __name__ == "__main__":

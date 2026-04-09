@@ -507,68 +507,74 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
-
-    snapshots = _collect_snapshots(args.indir, args.pattern)
+def run_analysis(
+    indir: str = "output",
+    pattern: str = "snap_*.npz",
+    config: str = "config.txt",
+    probe_x: Optional[float] = None,
+    probe_y: Optional[float] = None,
+    u_ref: float = 1.0,
+    length_scale: Optional[float] = None,
+    use_cylinder_diameter: bool = False,
+    cylinder_radius: Optional[float] = None,
+    t_min: float = 1.0,
+    f_min: float = 0.05,
+    f_max: float = 2.0,
+    n_freq: int = 4000,
+    save_series: Optional[str] = None,
+    save_report: Optional[str] = os.path.join(DEFAULT_RESULTS_DIR, "aero_report.txt"),
+) -> int:
+    """Run aerodynamic post-processing programmatically."""
+    snapshots = _collect_snapshots(indir, pattern)
     if not snapshots:
-        print(
-            f"No snapshots found in {args.indir!r} with pattern {args.pattern!r}.")
+        print(f"No snapshots found in {indir!r} with pattern {pattern!r}.")
         return 1
 
-    # Estimate common scales
     l_char, u_ref, nx, ny, lx, ly = _estimate_scales(
         snapshots[0][1],
-        length_scale=args.length_scale,
-        use_cylinder_diameter=args.use_cylinder_diameter,
-        u_ref=args.u_ref,
-        config_path=args.config,
+        length_scale=length_scale,
+        use_cylinder_diameter=use_cylinder_diameter,
+        u_ref=u_ref,
+        config_path=config,
     )
 
-    # Estimate cylinder geometry
     geom = _estimate_cylinder_geometry(
         snapshots[0][1],
-        config_path=args.config,
-        cylinder_radius=args.cylinder_radius,
+        config_path=config,
+        cylinder_radius=cylinder_radius,
     )
 
-    # Extract combined series
     t, u_probe, v_probe, p_probe, f_x, f_y, c_d, c_l = _extract_combined_series(
         snapshots,
         nx=nx,
         ny=ny,
         lx=lx,
         ly=ly,
-        probe_x=args.probe_x,
-        probe_y=args.probe_y,
+        probe_x=probe_x,
+        probe_y=probe_y,
         geom=geom,
         u_ref=u_ref,
         char_length=l_char,
     )
 
-    # Save combined time series
-    if args.save_series:
-        out = np.column_stack(
-            (t, u_probe, v_probe, p_probe, f_x, f_y, c_d, c_l))
+    if save_series:
+        out = np.column_stack((t, u_probe, v_probe, p_probe, f_x, f_y, c_d, c_l))
         header = "t,u_probe,v_probe,p_probe,f_x,f_y,c_d,c_l"
-        np.savetxt(args.save_series, out, delimiter=",",
-                   header=header, comments="")
-        print(f"Saved combined series: {args.save_series}")
+        np.savetxt(save_series, out, delimiter=",", header=header, comments="")
+        print(f"Saved combined series: {save_series}")
 
-    # Compute Strouhal from lift coefficient history.
     dt = np.diff(t)
     dt_median = float(np.median(dt)) if dt.size else np.nan
-    nyquist_est = 0.5 / \
-        dt_median if np.isfinite(dt_median) and dt_median > 0 else np.nan
+    nyquist_est = 0.5 / dt_median if np.isfinite(dt_median) and dt_median > 0 else np.nan
 
     lift_strouhal: Optional[SpectralResult] = None
     out = _dominant_frequency(
         t,
         c_l,
-        t_min=args.t_min,
-        f_min=args.f_min,
-        f_max=args.f_max,
-        n_freq=args.n_freq,
+        t_min=t_min,
+        f_min=f_min,
+        f_max=f_max,
+        n_freq=n_freq,
     )
     if out is not None:
         f_peak, peak_power = out
@@ -578,21 +584,19 @@ def main() -> int:
             st=f_peak * l_char / u_ref,
         )
 
-    # Force statistics
     c_d_mean = float(np.mean(c_d))
     c_d_std = float(np.std(c_d))
     c_l_mean = float(np.mean(c_l))
     c_l_std = float(np.std(c_l))
     c_l_rms = float(np.sqrt(np.mean(c_l**2)))
 
-    # Print comprehensive report
     print("=" * 70)
     print("COMPREHENSIVE AERODYNAMIC ANALYSIS")
     print("=" * 70)
     print(f"Snapshots         : {len(snapshots)}")
     print(f"Time span         : [{t.min():.4f}, {t.max():.4f}]")
-    if args.probe_x is not None and args.probe_y is not None:
-        print(f"Probe location    : ({args.probe_x:.6g}, {args.probe_y:.6g})")
+    if probe_x is not None and probe_y is not None:
+        print(f"Probe location    : ({probe_x:.6g}, {probe_y:.6g})")
     print(f"Cylinder center   : ({geom.center_x:.6g}, {geom.center_y:.6g})")
     print(f"Cylinder radius   : {geom.radius:.6g}")
     print(f"Char. length (L)  : {l_char:.6g}")
@@ -602,16 +606,15 @@ def main() -> int:
     print("STROUHAL NUMBER ANALYSIS")
     print("-" * 70)
     print("Signal used       : C_l")
-    print(f"Frequency window  : [{args.f_min:.4f}, {args.f_max:.4f}]")
+    print(f"Frequency window  : [{f_min:.4f}, {f_max:.4f}]")
     if np.isfinite(nyquist_est):
-        print(
-            f"Median dt         : {dt_median:.6g} (Nyquist approx {nyquist_est:.6g})")
+        print(f"Median dt         : {dt_median:.6g} (Nyquist approx {nyquist_est:.6g})")
 
     if lift_strouhal is None:
         print("C_l peak         : unavailable (insufficient variation/samples)")
     else:
         edge_note = ""
-        if _is_edge_frequency(lift_strouhal.freq, args.f_min, args.f_max):
+        if _is_edge_frequency(lift_strouhal.freq, f_min, f_max):
             edge_note = " [edge]"
         print(
             f"C_l peak         : f={lift_strouhal.freq:.6g}, "
@@ -621,7 +624,6 @@ def main() -> int:
         print("-" * 70)
         print(f"Lift f0           : {lift_strouhal.freq:.6g}")
         print(f"Lift Strouhal     : {lift_strouhal.st:.6g}")
-
         if np.isfinite(nyquist_est) and lift_strouhal.freq > 0.8 * nyquist_est:
             print("WARNING: Estimated f0 is close to Nyquist limit.")
             print("         Use smaller save_dt for confidence.")
@@ -636,9 +638,8 @@ def main() -> int:
     print(f"C_l std           : {c_l_std:.6g}")
     print(f"C_l rms           : {c_l_rms:.6g}")
 
-    # Save comprehensive report
-    if args.save_report:
-        report_dir = os.path.dirname(args.save_report)
+    if save_report:
+        report_dir = os.path.dirname(save_report)
         if report_dir:
             os.makedirs(report_dir, exist_ok=True)
 
@@ -656,14 +657,11 @@ def main() -> int:
             "STROUHAL NUMBER ANALYSIS",
             "-" * 70,
             "Signal used       : C_l",
-            f"Frequency window  : [{args.f_min:.4f}, {args.f_max:.4f}]",
+            f"Frequency window  : [{f_min:.4f}, {f_max:.4f}]",
         ]
 
-        if args.probe_x is not None and args.probe_y is not None:
-            lines.insert(
-                4,
-                f"Probe location    : ({args.probe_x:.6g}, {args.probe_y:.6g})",
-            )
+        if probe_x is not None and probe_y is not None:
+            lines.insert(4, f"Probe location    : ({probe_x:.6g}, {probe_y:.6g})")
 
         if np.isfinite(nyquist_est):
             lines.append(
@@ -672,12 +670,10 @@ def main() -> int:
             )
 
         if lift_strouhal is None:
-            lines.append(
-                "C_l peak         : unavailable (insufficient variation/samples)"
-            )
+            lines.append("C_l peak         : unavailable (insufficient variation/samples)")
         else:
             edge_note = ""
-            if _is_edge_frequency(lift_strouhal.freq, args.f_min, args.f_max):
+            if _is_edge_frequency(lift_strouhal.freq, f_min, f_max):
                 edge_note = " [edge]"
             lines.append(
                 f"C_l peak         : f={lift_strouhal.freq:.6g}, "
@@ -700,12 +696,33 @@ def main() -> int:
             f"C_l rms           : {c_l_rms:.6g}",
         ])
 
-        with open(args.save_report, "w", encoding="utf-8") as fout:
+        with open(save_report, "w", encoding="utf-8") as fout:
             fout.write("\n".join(lines) + "\n")
 
-        print(f"\nSaved comprehensive report: {args.save_report}")
+        print(f"\nSaved comprehensive report: {save_report}")
 
     return 0
+
+
+def main() -> int:
+    args = parse_args()
+    return run_analysis(
+        indir=args.indir,
+        pattern=args.pattern,
+        config=args.config,
+        probe_x=args.probe_x,
+        probe_y=args.probe_y,
+        u_ref=args.u_ref,
+        length_scale=args.length_scale,
+        use_cylinder_diameter=args.use_cylinder_diameter,
+        cylinder_radius=args.cylinder_radius,
+        t_min=args.t_min,
+        f_min=args.f_min,
+        f_max=args.f_max,
+        n_freq=args.n_freq,
+        save_series=args.save_series,
+        save_report=args.save_report,
+    )
 
 
 if __name__ == "__main__":
