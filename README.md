@@ -62,7 +62,7 @@ python main.py
 
 Run the solver on a non-uniform grid focused around the cylinder location:
 ```bash
-python main.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0
+python main.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0 --band-fraction-x 0.33 --band-fraction-y 0.33
 ```
 
 Pre-generate prepared grid metadata without running the solver:
@@ -72,7 +72,7 @@ python pre_generate_grid.py
 
 Generate non-uniform prepared-grid metadata focused around the cylinder location:
 ```bash
-python pre_generate_grid.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0
+python pre_generate_grid.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0 --band-fraction-x 0.33 --band-fraction-y 0.33
 ```
 
 Override config parameters from the command line:
@@ -103,6 +103,8 @@ All arguments are optional and override values in `config.txt`:
 --grid-type STR    Runtime grid type: uniform or nonuniform (default: from config)
 --beta-x FLOAT     Nonuniform x-stretch beta (default: from config)
 --beta-y FLOAT     Nonuniform y-stretch beta (default: from config)
+--band-fraction-x FLOAT  Fraction of x refined in the center band (default: from config)
+--band-fraction-y FLOAT  Fraction of y refined in the center band (default: from config)
 --cylinder BOOL    Enable immersed-boundary cylinder (default: from config)
 --cylinder-center-x FLOAT   Cylinder center x coordinate (default: from config or lx/4)
 --cylinder-center-y FLOAT   Cylinder center y coordinate (default: from config or ly/2)
@@ -169,7 +171,7 @@ This writes:
 outdir/nonuniform_grid.npz
 ```
 
-The runtime solver can now run on non-uniform 2-D grids by setting `--grid-type nonuniform` (or config equivalents).
+The runtime solver can now run on non-uniform 2-D grids by setting `--grid-type nonuniform` (or config equivalents). The refined region is a configurable center band in each direction via `grid_band_fraction_x/y` or `--band-fraction-x/y`.
 
 Examples:
 

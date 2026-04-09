@@ -22,6 +22,25 @@ def parse_args() -> argparse.Namespace:
 
     cfg = ConfigParser(args_pre.config)
 
+    # Unified grid controls from config.txt.
+    # Backward compatibility:
+    # 1) If uniform_grid is set, it overrides string grid type keys.
+    # 2) Otherwise grid_type can override legacy pre_grid_type.
+    # 3) grid_beta_x/y can override legacy pre betas.
+    uniform_grid = cfg.get("uniform_grid", None, bool)
+    if uniform_grid is None:
+        grid_type_default = cfg.get("grid_type", cfg.get(
+            "pre_grid_type", "uniform", str), str)
+    else:
+        grid_type_default = "uniform" if uniform_grid else "nonuniform"
+
+    beta_x_default = cfg.get("grid_beta_x", cfg.get(
+        "pre_nonuniform_beta_x", 2.0, float), float)
+    beta_y_default = cfg.get("grid_beta_y", cfg.get(
+        "pre_nonuniform_beta_y", 2.0, float), float)
+    band_fraction_x_default = cfg.get("grid_band_fraction_x", 1.0 / 3.0, float)
+    band_fraction_y_default = cfg.get("grid_band_fraction_y", 1.0 / 3.0, float)
+
     p = argparse.ArgumentParser(
         description="Pre-generate prepared grid metadata for post-processing and setup",
     )
@@ -38,32 +57,44 @@ def parse_args() -> argparse.Namespace:
         "--grid-type",
         type=str,
         choices=["uniform", "nonuniform"],
-        default=cfg.get("pre_grid_type", "uniform", str),
+        default=grid_type_default,
         help="Prepared-grid type to generate",
     )
     p.add_argument(
         "--beta-x",
         type=float,
-        default=cfg.get("pre_nonuniform_beta_x", 2.0, float),
-        help="x-direction tanh stretch beta for nonuniform grid (<=0 gives uniform spacing)",
+        default=beta_x_default,
+        help="x-direction center-density boost for nonuniform grid (<=0 gives uniform spacing)",
     )
     p.add_argument(
         "--beta-y",
         type=float,
-        default=cfg.get("pre_nonuniform_beta_y", 2.0, float),
-        help="y-direction tanh stretch beta for nonuniform grid (<=0 gives uniform spacing)",
+        default=beta_y_default,
+        help="y-direction center-density boost for nonuniform grid (<=0 gives uniform spacing)",
+    )
+    p.add_argument(
+        "--band-fraction-x",
+        type=float,
+        default=band_fraction_x_default,
+        help="Fraction of the x-domain width refined in the nonuniform center band",
+    )
+    p.add_argument(
+        "--band-fraction-y",
+        type=float,
+        default=band_fraction_y_default,
+        help="Fraction of the y-domain width refined in the nonuniform center band",
     )
     p.add_argument(
         "--focus-x",
         type=float,
         default=cfg.get("cylinder_center_x", -1.0, float),
-        help="Focus x-coordinate for piecewise-cylinder mode (<0 uses lx/4)",
+        help="Center x-coordinate for the refined band (<0 uses domain midpoint)",
     )
     p.add_argument(
         "--focus-y",
         type=float,
         default=cfg.get("cylinder_center_y", -1.0, float),
-        help="Focus y-coordinate for piecewise-cylinder mode (<0 uses ly/2)",
+        help="Center y-coordinate for the refined band (<0 uses domain midpoint)",
     )
     p.add_argument(
         "--output-name",
@@ -95,7 +126,7 @@ if __name__ == "__main__":
             f"{display_path} for nx={grid.nx}, ny={grid.ny}, lx={grid.lx}, ly={grid.ly}"
         )
     else:
-        focus_x = args.focus_x if args.focus_x >= 0.0 else args.lx / 4.0
+        focus_x = args.focus_x if args.focus_x >= 0.0 else args.lx / 2.0
         focus_y = args.focus_y if args.focus_y >= 0.0 else args.ly / 2.0
         metadata = build_nonuniform_grid_metadata(
             nx=args.nx,
@@ -106,11 +137,14 @@ if __name__ == "__main__":
             beta_y=args.beta_y,
             focus_x=focus_x,
             focus_y=focus_y,
+            band_fraction_x=args.band_fraction_x,
+            band_fraction_y=args.band_fraction_y,
         )
         save_grid_metadata_dict(output_path, metadata)
         print(
             "Saved nonuniform prepared grid metadata to "
             f"{display_path} for nx={args.nx}, ny={args.ny}, lx={args.lx}, ly={args.ly}, "
             f"beta_x={args.beta_x}, beta_y={args.beta_y}, "
-            f"mode=piecewise-cylinder, focus=({focus_x}, {focus_y})"
+            f"band_fraction_x={args.band_fraction_x}, band_fraction_y={args.band_fraction_y}, "
+            f"mode=center-band, center=({focus_x}, {focus_y})"
         )

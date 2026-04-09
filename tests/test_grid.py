@@ -1,7 +1,12 @@
 """Tests for CartesianGrid."""
 import numpy as np
 import pytest
-from src.grid import CartesianGrid, build_nonuniform_grid_metadata, stretched_faces_tanh
+from src.grid import (
+    CartesianGrid,
+    build_nonuniform_grid_metadata,
+    stretched_faces_center_band,
+    stretched_faces_tanh,
+)
 from src.io_utils import load_grid_metadata, load_grid_metadata_dict, save_grid_metadata, save_grid_metadata_dict
 
 
@@ -102,6 +107,12 @@ class TestPreparedNonuniformGrid:
         xf = stretched_faces_tanh(4, 1.0, beta=0.0)
         assert np.allclose(xf, [0.0, 0.25, 0.5, 0.75, 1.0])
 
+    def test_center_band_returns_uniform_faces_when_beta_nonpositive(self):
+        xf, band_start, band_end = stretched_faces_center_band(6, 3.0, beta=0.0)
+        assert np.allclose(xf, np.linspace(0.0, 3.0, 7))
+        assert np.isclose(band_start, 0.0)
+        assert np.isclose(band_end, 3.0)
+
     def test_nonuniform_metadata_has_expected_shapes(self):
         meta = build_nonuniform_grid_metadata(
             nx=8,
@@ -116,8 +127,45 @@ class TestPreparedNonuniformGrid:
         assert meta["yf"].shape == (5,)
         assert meta["dx"].shape == (8,)
         assert meta["dy"].shape == (4,)
+        assert meta["nonuniform_mode"] == "center-band"
+        assert np.isclose(meta["band_fraction_x"], 1.0 / 3.0)
+        assert np.isclose(meta["band_fraction_y"], 1.0 / 3.0)
         assert np.isclose(meta["xf"][0], 0.0)
         assert np.isclose(meta["xf"][-1], 2.0)
+
+    def test_nonuniform_grid_concentrates_cells_in_center_band(self):
+        meta = build_nonuniform_grid_metadata(
+            nx=90,
+            ny=30,
+            lx=9.0,
+            ly=3.0,
+            beta_x=2.0,
+            beta_y=2.0,
+            band_fraction_x=1.0 / 3.0,
+            band_fraction_y=1.0 / 3.0,
+        )
+        xc = meta["xc"]
+        dx = meta["dx"]
+        band_mask = (xc >= meta["band_start_x"]) & (xc <= meta["band_end_x"])
+        outer_mask = ~band_mask
+        assert np.mean(dx[band_mask]) < np.mean(dx[outer_mask])
+
+    def test_nonuniform_grid_outside_spacing_stays_close_to_uniform(self):
+        meta = build_nonuniform_grid_metadata(
+            nx=90,
+            ny=30,
+            lx=9.0,
+            ly=3.0,
+            beta_x=2.0,
+            beta_y=2.0,
+            band_fraction_x=1.0 / 3.0,
+            band_fraction_y=1.0 / 3.0,
+        )
+        xc = meta["xc"]
+        dx = meta["dx"]
+        uniform_dx = 9.0 / 90.0
+        outer_mask = (xc < meta["band_start_x"]) | (xc > meta["band_end_x"])
+        assert np.mean(dx[outer_mask]) == pytest.approx(uniform_dx, rel=0.25)
 
     def test_nonuniform_metadata_round_trip_dict_loader(self, tmp_path):
         path = tmp_path / "nonuniform_grid.npz"

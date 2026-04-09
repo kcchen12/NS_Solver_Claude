@@ -42,7 +42,7 @@ outflow_mode = convective
 outflow_speed = 1.0
 
 # Time integration
-t_end = 100
+t_end = 1
 cfl = .5
 
 # I/O parameters
@@ -50,8 +50,20 @@ save_dt = 1.0
 # Grid metadata is written to outdir/uniform_grid.npz by pre_generate_grid.py
 # and also at main.py startup.
 outdir = output
-# Runtime nonuniform mode (piecewise-cylinder)
-runtime_nonuniform_mode = piecewise-cylinder
+# Unified grid controls (used by both main.py and pre_generate_grid.py)
+# uniform_grid = true  -> uniform mesh
+# uniform_grid = false -> nonuniform mesh
+uniform_grid = false
+# Nonuniform density controls (smooth center-density boost)
+# Set <=0 in a direction to make that direction uniform.
+grid_beta_x = 2.0
+grid_beta_y = 2.0
+# Fraction of each domain direction covered by the refined center band.
+# Example: 0.333333 refines the middle third.
+grid_band_fraction_x = 0.333333
+grid_band_fraction_y = 0.333333
+# Runtime nonuniform mode (center-band)
+runtime_nonuniform_mode = center-band
 
 # Features (true/false)
 cylinder = true

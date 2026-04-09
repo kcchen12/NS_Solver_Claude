@@ -240,17 +240,63 @@ def _cluster_to_lower_end(n: int, length: float, beta: float) -> np.ndarray:
     return length * s
 
 
-def stretched_faces_piecewise_focus(
+def _allocate_piecewise_cells(
+    n: int,
+    lengths: np.ndarray,
+    weights: np.ndarray,
+) -> np.ndarray:
+    """Allocate integer cell counts across piecewise segments."""
+    lengths = np.asarray(lengths, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    positive = lengths > 1e-14
+
+    counts = np.zeros_like(lengths, dtype=int)
+    num_positive = int(np.count_nonzero(positive))
+    if num_positive == 0:
+        raise ValueError("At least one segment must have positive length")
+
+    if n <= num_positive:
+        ranked = np.argsort(-(lengths * weights))
+        counts[ranked[:n]] = 1
+        return counts
+
+    counts[positive] = 1
+    remaining = n - num_positive
+    effective = lengths[positive] * weights[positive]
+    total = float(np.sum(effective))
+    if total <= 0.0:
+        counts[positive] += remaining // num_positive
+        counts[np.flatnonzero(positive)[:remaining % num_positive]] += 1
+        return counts
+
+    raw = remaining * effective / total
+    add = np.floor(raw).astype(int)
+    counts[np.flatnonzero(positive)] += add
+
+    shortfall = remaining - int(np.sum(add))
+    if shortfall > 0:
+        frac = raw - add
+        order = np.argsort(-frac)
+        positive_idx = np.flatnonzero(positive)
+        for idx in order[:shortfall]:
+            counts[positive_idx[idx]] += 1
+
+    return counts
+
+
+def stretched_faces_center_band(
     n: int,
     length: float,
     beta: float,
-    focus: float,
-) -> np.ndarray:
-    """Piecewise monotonic faces clustered around an interior focus location.
+    center: float | None = None,
+    band_fraction: float = 1.0 / 3.0,
+) -> tuple[np.ndarray, float, float]:
+    """Faces concentrated smoothly toward the middle of a central band.
 
-    The interval [0, length] is split at ``focus``. The left segment is
-    clustered toward ``focus`` from below, and the right segment is clustered
-    toward ``focus`` from above.
+    Outside the band, the target point density stays near the uniform-grid
+    baseline. Inside the band, a raised-cosine boost increases density
+    smoothly toward the band center, so spacing decreases gently as you move
+    inward rather than collapsing at the band edges.
     """
     if n <= 0:
         raise ValueError("n must be positive")
@@ -258,23 +304,35 @@ def stretched_faces_piecewise_focus(
         raise ValueError("length must be positive")
 
     if beta <= 0.0:
-        return stretched_faces_tanh(n, length, beta=0.0)
+        return stretched_faces_tanh(n, length, beta=0.0), 0.0, length
 
+    frac = float(np.clip(band_fraction, 1e-3, 1.0))
+    band_width = frac * length
+    half_width = 0.5 * band_width
     eps = 1e-12 * max(1.0, length)
-    focus_clamped = float(np.clip(focus, eps, length - eps))
 
-    n_left = int(round(n * (focus_clamped / length)))
-    n_left = int(np.clip(n_left, 1, n - 1))
-    n_right = n - n_left
+    center_default = 0.5 * length if center is None else float(center)
+    center_clamped = float(np.clip(center_default, half_width + eps, length - half_width - eps))
+    band_start = max(0.0, center_clamped - half_width)
+    band_end = min(length, center_clamped + half_width)
 
-    left_faces = _cluster_to_upper_end(n_left, focus_clamped, beta)
-    right_local = _cluster_to_lower_end(n_right, length - focus_clamped, beta)
-    right_faces = focus_clamped + right_local
+    dense_points = max(2001, 50 * n + 1)
+    x_dense = np.linspace(0.0, length, dense_points)
+    density = np.ones_like(x_dense)
 
-    faces = np.concatenate([left_faces[:-1], right_faces])
+    inside = (x_dense >= band_start) & (x_dense <= band_end)
+    if np.any(inside):
+        local = (x_dense[inside] - center_clamped) / max(half_width, eps)
+        # Raised-cosine bump: density=1 at band edges and density=1+beta at center.
+        density[inside] += beta * 0.5 * (1.0 + np.cos(np.pi * local))
+
+    cumulative = np.zeros_like(x_dense)
+    cumulative[1:] = np.cumsum(0.5 * (density[:-1] + density[1:]) * np.diff(x_dense))
+    targets = np.linspace(0.0, cumulative[-1], n + 1)
+    faces = np.interp(targets, cumulative, x_dense)
     faces[0] = 0.0
     faces[-1] = length
-    return faces
+    return faces, band_start, band_end
 
 
 def build_nonuniform_grid_metadata(
@@ -286,24 +344,36 @@ def build_nonuniform_grid_metadata(
     beta_y: float,
     focus_x: float | None = None,
     focus_y: float | None = None,
+    band_fraction_x: float = 1.0 / 3.0,
+    band_fraction_y: float = 1.0 / 3.0,
 ) -> dict:
     """Build serializable metadata for a 2-D non-uniform Cartesian grid.
 
-    Non-uniform spacing is clustered around the provided focus point.
+    Non-uniform spacing is concentrated inside a rectangular interior band.
     """
-    fx = lx / 4.0 if focus_x is None else float(focus_x)
-    fy = ly / 2.0 if focus_y is None else float(focus_y)
-    xf = stretched_faces_piecewise_focus(nx, lx, beta_x, focus=fx)
-    yf = stretched_faces_piecewise_focus(ny, ly, beta_y, focus=fy)
+    center_x = 0.5 * lx if focus_x is None else float(focus_x)
+    center_y = 0.5 * ly if focus_y is None else float(focus_y)
+    xf, band_start_x, band_end_x = stretched_faces_center_band(
+        nx, lx, beta_x, center=center_x, band_fraction=band_fraction_x
+    )
+    yf, band_start_y, band_end_y = stretched_faces_center_band(
+        ny, ly, beta_y, center=center_y, band_fraction=band_fraction_y
+    )
 
     grid = CartesianGrid(nx=nx, ny=ny, lx=lx, ly=ly, xf=xf, yf=yf)
     metadata = grid.to_metadata()
     metadata["grid_type"] = "nonuniform"
     metadata["beta_x"] = float(beta_x)
     metadata["beta_y"] = float(beta_y)
-    metadata["nonuniform_mode"] = "piecewise-cylinder"
-    metadata["focus_x"] = float(fx)
-    metadata["focus_y"] = float(fy)
+    metadata["nonuniform_mode"] = "center-band"
+    metadata["focus_x"] = float(center_x)
+    metadata["focus_y"] = float(center_y)
+    metadata["band_fraction_x"] = float(band_fraction_x)
+    metadata["band_fraction_y"] = float(band_fraction_y)
+    metadata["band_start_x"] = float(band_start_x)
+    metadata["band_end_x"] = float(band_end_x)
+    metadata["band_start_y"] = float(band_start_y)
+    metadata["band_end_y"] = float(band_end_y)
     metadata["dx"] = grid.dx_cells.copy()
     metadata["dy"] = grid.dy_cells.copy()
     return metadata

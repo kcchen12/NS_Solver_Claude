@@ -51,6 +51,7 @@ from src.io_utils import (
     save_grid_metadata,
     save_grid_metadata_dict,
     load_prepared_grid,
+    load_grid_metadata_dict,
 )
 from src.parallel import ParallelDecomposition
 from src.config import ConfigParser
@@ -100,6 +101,34 @@ def parse_args():
     # Read config file
     cfg = ConfigParser(args_pre.config)
 
+    # Unified grid controls from config.txt.
+    # Backward compatibility:
+    # 1) If uniform_grid is set, it overrides string grid type keys.
+    # 2) Otherwise grid_type can override legacy runtime_grid_type.
+    # 3) grid_beta_x/y can override legacy runtime/pre betas.
+    uniform_grid = cfg.get("uniform_grid", None, bool)
+    if uniform_grid is None:
+        grid_type_default = cfg.get(
+            "grid_type", cfg.get("runtime_grid_type", "uniform", str), str
+        )
+    else:
+        grid_type_default = "uniform" if uniform_grid else "nonuniform"
+
+    beta_x_default = cfg.get(
+        "grid_beta_x",
+        cfg.get("runtime_nonuniform_beta_x", cfg.get(
+            "pre_nonuniform_beta_x", 2.0, float), float),
+        float,
+    )
+    beta_y_default = cfg.get(
+        "grid_beta_y",
+        cfg.get("runtime_nonuniform_beta_y", cfg.get(
+            "pre_nonuniform_beta_y", 2.0, float), float),
+        float,
+    )
+    band_fraction_x_default = cfg.get("grid_band_fraction_x", 1.0 / 3.0, float)
+    band_fraction_y_default = cfg.get("grid_band_fraction_y", 1.0 / 3.0, float)
+
     # Now parse all arguments with defaults from config file
     p = argparse.ArgumentParser(description="2-D Navier-Stokes solver")
     p.add_argument("--config", type=str, default=default_config,
@@ -120,16 +149,20 @@ def parse_args():
                    default=cfg.get("outdir", default_outdir, str))
     p.add_argument("--grid-type", type=str,
                    choices=["uniform", "nonuniform"],
-                   default=cfg.get("runtime_grid_type", "uniform", str),
+                   default=grid_type_default,
                    help="Runtime grid type")
     p.add_argument("--beta-x", type=float,
-                   default=cfg.get("runtime_nonuniform_beta_x", cfg.get(
-                       "pre_nonuniform_beta_x", 2.0, float), float),
-                   help="x-direction tanh stretch beta for nonuniform grid")
+                   default=beta_x_default,
+                   help="x-direction center-density boost for nonuniform grid")
     p.add_argument("--beta-y", type=float,
-                   default=cfg.get("runtime_nonuniform_beta_y", cfg.get(
-                       "pre_nonuniform_beta_y", 2.0, float), float),
-                   help="y-direction tanh stretch beta for nonuniform grid")
+                   default=beta_y_default,
+                   help="y-direction center-density boost for nonuniform grid")
+    p.add_argument("--band-fraction-x", type=float,
+                   default=band_fraction_x_default,
+                   help="Fraction of the x-domain width refined in the nonuniform center band")
+    p.add_argument("--band-fraction-y", type=float,
+                   default=band_fraction_y_default,
+                   help="Fraction of the y-domain width refined in the nonuniform center band")
     p.add_argument("--cylinder", type=str_to_bool, default=cfg.get("cylinder", False, bool),
                    help="Add an immersed-boundary cylinder at the domain centre")
     p.add_argument("--cylinder-radius", type=float,
@@ -146,6 +179,9 @@ def parse_args():
                    help="Interpret --re as Re_D based on cylinder diameter when cylinder is enabled")
     p.add_argument("--plot",     type=str_to_bool, default=cfg.get("plot", False, bool),
                    help="Show matplotlib plots after simulation")
+    p.add_argument("--plot-grid", type=str_to_bool,
+                   default=cfg.get("plot_grid", False, bool),
+                   help="Save a physical grid plot showing mesh concentration")
     p.add_argument("--verbose",  type=str_to_bool, default=cfg.get("verbose", True, bool),
                    help="Print periodic diagnostics during the time loop")
 
@@ -197,14 +233,55 @@ def _grid_metadata_path(args) -> str:
     return os.path.join(args.outdir, name)
 
 
-def _grid_matches_args(grid, args) -> bool:
+def _expected_nonuniform_focus(args) -> tuple[float, float]:
+    focus_x = args.cylinder_center_x if args.cylinder_center_x >= 0.0 else args.lx / 2.0
+    focus_y = args.cylinder_center_y if args.cylinder_center_y >= 0.0 else args.ly / 2.0
+    return focus_x, focus_y
+
+
+def _expected_nonuniform_band(args) -> tuple[float, float, float, float]:
+    center_x, center_y = _expected_nonuniform_focus(args)
+    width_x = float(np.clip(args.band_fraction_x, 1e-3, 1.0)) * args.lx
+    width_y = float(np.clip(args.band_fraction_y, 1e-3, 1.0)) * args.ly
+    start_x = float(np.clip(center_x - 0.5 * width_x, 0.0, args.lx - width_x))
+    end_x = start_x + width_x
+    start_y = float(np.clip(center_y - 0.5 * width_y, 0.0, args.ly - width_y))
+    end_y = start_y + width_y
+    return start_x, end_x, start_y, end_y
+
+
+def _grid_matches_args(metadata: dict, grid, args) -> bool:
+    metadata_type = str(metadata.get("grid_type", "uniform")).strip().lower()
+
     return (
         grid.nx == args.nx and
         grid.ny == args.ny and
         np.isclose(grid.lx, args.lx) and
         np.isclose(grid.ly, args.ly) and
-        ((args.grid_type == "uniform" and grid.is_uniform) or (
-            args.grid_type == "nonuniform" and not grid.is_uniform))
+        ((args.grid_type == "uniform" and grid.is_uniform and metadata_type == "uniform") or (
+            args.grid_type == "nonuniform" and not grid.is_uniform and metadata_type == "nonuniform"))
+    )
+
+
+def _nonuniform_metadata_matches_args(metadata: dict, args) -> bool:
+    # Only accept nonuniform files that were built with the expected mode and parameters.
+    mode = str(metadata.get("nonuniform_mode", "")).strip().lower()
+    if mode != "center-band":
+        return False
+
+    focus_x, focus_y = _expected_nonuniform_focus(args)
+    band_start_x, band_end_x, band_start_y, band_end_y = _expected_nonuniform_band(args)
+    return (
+        np.isclose(float(metadata.get("beta_x", np.nan)), float(args.beta_x)) and
+        np.isclose(float(metadata.get("beta_y", np.nan)), float(args.beta_y)) and
+        np.isclose(float(metadata.get("focus_x", np.nan)), float(focus_x)) and
+        np.isclose(float(metadata.get("focus_y", np.nan)), float(focus_y)) and
+        np.isclose(float(metadata.get("band_fraction_x", np.nan)), float(args.band_fraction_x)) and
+        np.isclose(float(metadata.get("band_fraction_y", np.nan)), float(args.band_fraction_y)) and
+        np.isclose(float(metadata.get("band_start_x", np.nan)), float(band_start_x)) and
+        np.isclose(float(metadata.get("band_end_x", np.nan)), float(band_end_x)) and
+        np.isclose(float(metadata.get("band_start_y", np.nan)), float(band_start_y)) and
+        np.isclose(float(metadata.get("band_end_y", np.nan)), float(band_end_y))
     )
 
 
@@ -222,8 +299,7 @@ def prepare_uniform_grid(args):
 
 def prepare_nonuniform_grid(args):
     """Build the runtime non-uniform grid and write its metadata before startup."""
-    focus_x = args.cylinder_center_x if args.cylinder_center_x >= 0.0 else args.lx / 4.0
-    focus_y = args.cylinder_center_y if args.cylinder_center_y >= 0.0 else args.ly / 2.0
+    focus_x, focus_y = _expected_nonuniform_focus(args)
     metadata = build_nonuniform_grid_metadata(
         nx=args.nx,
         ny=args.ny,
@@ -233,6 +309,8 @@ def prepare_nonuniform_grid(args):
         beta_y=args.beta_y,
         focus_x=focus_x,
         focus_y=focus_y,
+        band_fraction_x=args.band_fraction_x,
+        band_fraction_y=args.band_fraction_y,
     )
     os.makedirs(args.outdir, exist_ok=True)
     save_grid_metadata_dict(_grid_metadata_path(args), metadata)
@@ -244,10 +322,17 @@ def get_runtime_grid(args):
     grid_path = _grid_metadata_path(args)
     if os.path.exists(grid_path):
         try:
+            metadata = load_grid_metadata_dict(grid_path)
             grid = load_prepared_grid(grid_path)
-            if _grid_matches_args(grid, args):
-                return grid, True
-        except ValueError as exc:
+            if _grid_matches_args(metadata, grid, args):
+                if args.grid_type == "nonuniform" and not _nonuniform_metadata_matches_args(metadata, args):
+                    print(
+                        "Warning: Prepared nonuniform grid metadata does not match "
+                        "requested beta/band settings; regenerating grid."
+                    )
+                else:
+                    return grid, True
+        except (ValueError, OSError, KeyError) as exc:
             print(
                 f"Warning: Ignoring incompatible prepared grid at {grid_path}: {exc}"
             )
@@ -399,6 +484,8 @@ def run(args, grid=None, grid_loaded_from_file=False):
     # ------------------------------------------------------------------
     # Optional plot
     # ------------------------------------------------------------------
+    if args.plot_grid and is_root:
+        _plot_grid(grid, args)
     if args.plot and is_root:
         _plot_results(solver, grid, args)
 
@@ -455,11 +542,31 @@ def _plot_results(solver, grid, args):
     axes[1].set_ylabel("y")
     axes[1].set_aspect("equal")
 
-    # Streamlines
-    axes[2].streamplot(grid.xc, grid.yc,
-                       u_c.T, v_c.T,
-                       density=1.5, color=speed.T, cmap="plasma")
-    axes[2].set_title("Streamlines")
+    # Velocity visualization. streamplot requires equally spaced coordinates,
+    # so fall back to a nonuniform-safe quiver overlay when needed.
+    if grid.is_uniform:
+        axes[2].streamplot(grid.xc, grid.yc,
+                           u_c.T, v_c.T,
+                           density=1.5, color=speed.T, cmap="plasma")
+        axes[2].set_title("Streamlines")
+    else:
+        Xf, Yf = np.meshgrid(grid.xf, grid.yf, indexing="ij")
+        im2 = axes[2].pcolormesh(Xf, Yf, speed, shading="flat", cmap="plasma")
+        fig.colorbar(im2, ax=axes[2])
+        stride_x = max(1, grid.nx // 24)
+        stride_y = max(1, grid.ny // 16)
+        axes[2].quiver(
+            X[::stride_x, ::stride_y],
+            Y[::stride_x, ::stride_y],
+            u_c[::stride_x, ::stride_y],
+            v_c[::stride_x, ::stride_y],
+            color="white",
+            pivot="mid",
+            scale_units="xy",
+            scale=None,
+            width=0.003,
+        )
+        axes[2].set_title("Velocity Magnitude + Direction")
     axes[2].set_xlabel("x")
     axes[2].set_ylabel("y")
     axes[2].set_aspect("equal")
@@ -473,6 +580,109 @@ def _plot_results(solver, grid, args):
     plot_path = os.path.join(results_dir, "result.png")
     fig.savefig(plot_path, dpi=150)
     print(f"  Plot saved to {plot_path}")
+    plt.close(fig)
+
+
+def _plot_grid(grid, args):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.collections import LineCollection
+    except ImportError:
+        print("matplotlib not available - skipping grid plot.")
+        return
+
+    x_edges = np.asarray(grid.xf, dtype=float)
+    y_edges = np.asarray(grid.yf, dtype=float)
+    Xf, Yf = np.meshgrid(x_edges, y_edges, indexing="ij")
+
+    dx = np.asarray(grid.dx_cells, dtype=float)
+    dy = np.asarray(grid.dy_cells, dtype=float)
+    cell_area = dx[:, np.newaxis] * dy[np.newaxis, :]
+    density = 1.0 / np.maximum(cell_area, 1e-30)
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.8))
+
+    mesh_ax = axes[0]
+    vertical_segments = [
+        [(float(x), 0.0), (float(x), float(grid.ly))]
+        for x in x_edges
+    ]
+    horizontal_segments = [
+        [(0.0, float(y)), (float(grid.lx), float(y))]
+        for y in y_edges
+    ]
+    mesh_ax.add_collection(LineCollection(vertical_segments, colors="0.15", linewidths=0.6))
+    mesh_ax.add_collection(LineCollection(horizontal_segments, colors="0.15", linewidths=0.6))
+    mesh_ax.set_xlim(0.0, grid.lx)
+    mesh_ax.set_ylim(0.0, grid.ly)
+    mesh_ax.set_aspect("equal")
+    mesh_ax.set_title("Physical Grid")
+    mesh_ax.set_xlabel("x")
+    mesh_ax.set_ylabel("y")
+
+    density_ax = axes[1]
+    density_im = density_ax.pcolormesh(Xf, Yf, density, shading="flat", cmap="viridis")
+    fig.colorbar(density_im, ax=density_ax, label=r"Cell density $1/(\Delta x \Delta y)$")
+    density_ax.set_xlim(0.0, grid.lx)
+    density_ax.set_ylim(0.0, grid.ly)
+    density_ax.set_aspect("equal")
+    density_ax.set_title("Point Concentration")
+    density_ax.set_xlabel("x")
+    density_ax.set_ylabel("y")
+
+    spacing_ax = axes[2]
+    spacing_ax.plot(grid.xc, grid.dx_cells, label=r"$\Delta x$ at $x_c$", color="#d95f02", lw=2.0)
+    spacing_ax.plot(grid.yc, grid.dy_cells, label=r"$\Delta y$ at $y_c$", color="#1b9e77", lw=2.0)
+    spacing_ax.set_title("Cell Spacing")
+    spacing_ax.set_xlabel("Physical coordinate")
+    spacing_ax.set_ylabel("Cell width")
+    spacing_ax.grid(True, alpha=0.25)
+    spacing_ax.legend()
+
+    if args.grid_type == "nonuniform":
+        from matplotlib.patches import Rectangle
+        band_start_x, band_end_x, band_start_y, band_end_y = _expected_nonuniform_band(args)
+        rect_width = band_end_x - band_start_x
+        rect_height = band_end_y - band_start_y
+        mesh_ax.add_patch(
+            Rectangle(
+                (band_start_x, band_start_y),
+                rect_width,
+                rect_height,
+                fill=False,
+                ec="#c1121f",
+                ls="--",
+                lw=1.4,
+                alpha=0.9,
+            )
+        )
+        density_ax.add_patch(
+            Rectangle(
+                (band_start_x, band_start_y),
+                rect_width,
+                rect_height,
+                fill=False,
+                ec="white",
+                ls="--",
+                lw=1.2,
+                alpha=0.9,
+            )
+        )
+
+    fig.suptitle(
+        f"Grid type={args.grid_type}, nx={grid.nx}, ny={grid.ny}, "
+        f"dx_min={grid.dx_min:.4g}, dy_min={grid.dy_min:.4g}"
+    )
+    fig.tight_layout()
+
+    results_dir = os.path.join(os.path.dirname(
+        os.path.abspath(__file__)), "results")
+    os.makedirs(results_dir, exist_ok=True)
+    plot_path = os.path.join(results_dir, "grid.png")
+    fig.savefig(plot_path, dpi=180)
+    print(f"  Grid plot saved to {plot_path}")
     plt.close(fig)
 
 
