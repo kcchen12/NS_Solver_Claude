@@ -42,11 +42,16 @@ import os
 import sys
 import numpy as np
 
-from src.grid import CartesianGrid
+from src.grid import CartesianGrid, build_nonuniform_grid_metadata
 from src.boundary import BoundaryConfig, BCType
 from src.solver import FractionalStepSolver
 from src.ibm import ImmersedBoundary
-from src.io_utils import save_snapshot, save_grid_metadata, load_grid_metadata
+from src.io_utils import (
+    save_snapshot,
+    save_grid_metadata,
+    save_grid_metadata_dict,
+    load_prepared_grid,
+)
 from src.parallel import ParallelDecomposition
 from src.config import ConfigParser
 
@@ -113,6 +118,18 @@ def parse_args():
                    default=cfg.get("save_dt", 0.5, float))
     p.add_argument("--outdir",   type=str,
                    default=cfg.get("outdir", default_outdir, str))
+    p.add_argument("--grid-type", type=str,
+                   choices=["uniform", "nonuniform"],
+                   default=cfg.get("runtime_grid_type", "uniform", str),
+                   help="Runtime grid type")
+    p.add_argument("--beta-x", type=float,
+                   default=cfg.get("runtime_nonuniform_beta_x", cfg.get(
+                       "pre_nonuniform_beta_x", 2.0, float), float),
+                   help="x-direction tanh stretch beta for nonuniform grid")
+    p.add_argument("--beta-y", type=float,
+                   default=cfg.get("runtime_nonuniform_beta_y", cfg.get(
+                       "pre_nonuniform_beta_y", 2.0, float), float),
+                   help="y-direction tanh stretch beta for nonuniform grid")
     p.add_argument("--cylinder", type=str_to_bool, default=cfg.get("cylinder", False, bool),
                    help="Add an immersed-boundary cylinder at the domain centre")
     p.add_argument("--cylinder-radius", type=float,
@@ -176,7 +193,8 @@ def parse_args():
 
 
 def _grid_metadata_path(args) -> str:
-    return os.path.join(args.outdir, "uniform_grid.npz")
+    name = "uniform_grid.npz" if args.grid_type == "uniform" else "nonuniform_grid.npz"
+    return os.path.join(args.outdir, name)
 
 
 def _grid_matches_args(grid, args) -> bool:
@@ -184,7 +202,9 @@ def _grid_matches_args(grid, args) -> bool:
         grid.nx == args.nx and
         grid.ny == args.ny and
         np.isclose(grid.lx, args.lx) and
-        np.isclose(grid.ly, args.ly)
+        np.isclose(grid.ly, args.ly) and
+        ((args.grid_type == "uniform" and grid.is_uniform) or (
+            args.grid_type == "nonuniform" and not grid.is_uniform))
     )
 
 
@@ -200,13 +220,39 @@ def prepare_uniform_grid(args):
     return grid
 
 
+def prepare_nonuniform_grid(args):
+    """Build the runtime non-uniform grid and write its metadata before startup."""
+    focus_x = args.cylinder_center_x if args.cylinder_center_x >= 0.0 else args.lx / 4.0
+    focus_y = args.cylinder_center_y if args.cylinder_center_y >= 0.0 else args.ly / 2.0
+    metadata = build_nonuniform_grid_metadata(
+        nx=args.nx,
+        ny=args.ny,
+        lx=args.lx,
+        ly=args.ly,
+        beta_x=args.beta_x,
+        beta_y=args.beta_y,
+        focus_x=focus_x,
+        focus_y=focus_y,
+    )
+    os.makedirs(args.outdir, exist_ok=True)
+    save_grid_metadata_dict(_grid_metadata_path(args), metadata)
+    return CartesianGrid.from_metadata(metadata)
+
+
 def get_runtime_grid(args):
-    """Load a pre-generated grid when available, otherwise create one."""
+    """Load a pre-generated runtime grid when available, otherwise create one."""
     grid_path = _grid_metadata_path(args)
     if os.path.exists(grid_path):
-        grid = load_grid_metadata(grid_path)
-        if _grid_matches_args(grid, args):
-            return grid, True
+        try:
+            grid = load_prepared_grid(grid_path)
+            if _grid_matches_args(grid, args):
+                return grid, True
+        except ValueError as exc:
+            print(
+                f"Warning: Ignoring incompatible prepared grid at {grid_path}: {exc}"
+            )
+    if args.grid_type == "nonuniform":
+        return prepare_nonuniform_grid(args), False
     return prepare_uniform_grid(args), False
 
 
@@ -224,12 +270,14 @@ def run(args, grid=None, grid_loaded_from_file=False):
         print("=" * 60)
         print(f"  Config file   : {args.config}")
         print(f"  Grid          : {args.nx} x {args.ny}")
+        print(f"  Grid type     : {args.grid_type}")
         print(f"  Domain        : {args.lx} x {args.ly}")
         print(f"  Reynolds no.  : {args.re}")
         print(f"  End time      : {args.t_end}")
         print(f"  MPI ranks     : {decomp.size}")
         print(f"  IBM cylinder  : {args.cylinder}")
-        print(f"  Grid source   : {'pre-generated file' if grid_loaded_from_file else 'generated at startup'}")
+        print(
+            f"  Grid source   : {'pre-generated file' if grid_loaded_from_file else 'generated at startup'}")
         print("=" * 60)
 
     # ------------------------------------------------------------------

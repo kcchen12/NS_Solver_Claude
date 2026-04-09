@@ -33,10 +33,13 @@ import numpy as np
 
 
 class CartesianGrid:
-    """Uniform Cartesian grid supporting both 2-D and 3-D problems."""
+    """Cartesian grid supporting uniform and non-uniform 2-D layouts."""
 
     def __init__(self, nx: int, ny: int, nz: int = 1,
-                 lx: float = 1.0, ly: float = 1.0, lz: float = 1.0):
+                 lx: float = 1.0, ly: float = 1.0, lz: float = 1.0,
+                 xf: np.ndarray | None = None,
+                 yf: np.ndarray | None = None,
+                 zf: np.ndarray | None = None):
         """
         Parameters
         ----------
@@ -48,21 +51,55 @@ class CartesianGrid:
         self.nx, self.ny, self.nz = nx, ny, nz
         self.lx, self.ly, self.lz = lx, ly, lz
 
-        self.dx = lx / nx
-        self.dy = ly / ny
-        self.dz = lz / nz if nz > 1 else lz
-
         self.is_3d: bool = nz > 1
 
         # Cell-face (node) coordinates
-        self.xf = np.linspace(0.0, lx, nx + 1)   # x-face positions
-        self.yf = np.linspace(0.0, ly, ny + 1)   # y-face positions
-        self.zf = np.linspace(0.0, lz, nz + 1)   # z-face positions
+        self.xf = np.linspace(
+            0.0, lx, nx + 1) if xf is None else np.asarray(xf, dtype=float)
+        self.yf = np.linspace(
+            0.0, ly, ny + 1) if yf is None else np.asarray(yf, dtype=float)
+        self.zf = np.linspace(
+            0.0, lz, nz + 1) if zf is None else np.asarray(zf, dtype=float)
+
+        if self.xf.shape != (nx + 1,):
+            raise ValueError(f"xf must have shape ({nx + 1},)")
+        if self.yf.shape != (ny + 1,):
+            raise ValueError(f"yf must have shape ({ny + 1},)")
+        if self.zf.shape != (nz + 1,):
+            raise ValueError(f"zf must have shape ({nz + 1},)")
+        if not np.all(np.diff(self.xf) > 0.0):
+            raise ValueError("xf must be strictly increasing")
+        if not np.all(np.diff(self.yf) > 0.0):
+            raise ValueError("yf must be strictly increasing")
+        if not np.all(np.diff(self.zf) > 0.0):
+            raise ValueError("zf must be strictly increasing")
 
         # Cell-centre coordinates
         self.xc = 0.5 * (self.xf[:-1] + self.xf[1:])
         self.yc = 0.5 * (self.yf[:-1] + self.yf[1:])
         self.zc = 0.5 * (self.zf[:-1] + self.zf[1:])
+
+        self.dx_cells = np.diff(self.xf)
+        self.dy_cells = np.diff(self.yf)
+        self.dz_cells = np.diff(self.zf)
+
+        self.dx_min = float(np.min(self.dx_cells))
+        self.dy_min = float(np.min(self.dy_cells))
+        self.dz_min = float(np.min(self.dz_cells))
+        self.dx_max = float(np.max(self.dx_cells))
+        self.dy_max = float(np.max(self.dy_cells))
+        self.dz_max = float(np.max(self.dz_cells))
+
+        # Backward-compatible scalar spacings used in legacy code paths.
+        self.dx = self.dx_min
+        self.dy = self.dy_min
+        self.dz = self.dz_min if nz > 1 else lz
+
+        self.is_uniform = bool(
+            np.allclose(self.dx_cells, self.dx_cells[0]) and
+            np.allclose(self.dy_cells, self.dy_cells[0]) and
+            np.allclose(self.dz_cells, self.dz_cells[0])
+        )
 
     # ------------------------------------------------------------------
     # Array shape helpers
@@ -109,8 +146,9 @@ class CartesianGrid:
         return np.zeros(self.w_shape)
 
     def to_metadata(self) -> dict:
-        """Return serializable metadata describing the uniform grid."""
+        """Return serializable metadata describing the prepared grid."""
         return {
+            "grid_type": "uniform" if self.is_uniform else "nonuniform",
             "nx": self.nx,
             "ny": self.ny,
             "nz": self.nz,
@@ -120,6 +158,12 @@ class CartesianGrid:
             "dx": self.dx,
             "dy": self.dy,
             "dz": self.dz,
+            "dx_min": self.dx_min,
+            "dy_min": self.dy_min,
+            "dz_min": self.dz_min,
+            "dx_max": self.dx_max,
+            "dy_max": self.dy_max,
+            "dz_max": self.dz_max,
             "is_3d": self.is_3d,
             "xf": self.xf.copy(),
             "yf": self.yf.copy(),
@@ -127,11 +171,18 @@ class CartesianGrid:
             "xc": self.xc.copy(),
             "yc": self.yc.copy(),
             "zc": self.zc.copy(),
+            "dx_cells": self.dx_cells.copy(),
+            "dy_cells": self.dy_cells.copy(),
+            "dz_cells": self.dz_cells.copy(),
+            "is_uniform": self.is_uniform,
         }
 
     @classmethod
     def from_metadata(cls, metadata: dict) -> "CartesianGrid":
-        """Rebuild a uniform grid from saved metadata."""
+        """Rebuild a prepared grid from saved metadata."""
+        xf = metadata.get("xf", None)
+        yf = metadata.get("yf", None)
+        zf = metadata.get("zf", None)
         return cls(
             nx=int(metadata["nx"]),
             ny=int(metadata["ny"]),
@@ -139,9 +190,120 @@ class CartesianGrid:
             lx=float(metadata["lx"]),
             ly=float(metadata["ly"]),
             lz=float(metadata.get("lz", 1.0)),
+            xf=xf,
+            yf=yf,
+            zf=zf,
         )
 
     def __repr__(self) -> str:
         dim = "3D" if self.is_3d else "2D"
+        grid_kind = "uniform" if self.is_uniform else "nonuniform"
         return (f"CartesianGrid({dim}, nx={self.nx}, ny={self.ny}, nz={self.nz}, "
-                f"dx={self.dx:.4g}, dy={self.dy:.4g}, dz={self.dz:.4g})")
+                f"type={grid_kind}, dx_min={self.dx_min:.4g}, dy_min={self.dy_min:.4g}, dz={self.dz:.4g})")
+
+
+def stretched_faces_tanh(n: int, length: float, beta: float) -> np.ndarray:
+    """Build monotonic face coordinates in [0, length] using tanh stretching.
+
+    beta <= 0 returns a uniform distribution.
+    beta > 0 clusters cells near both boundaries and coarsens near the center.
+    """
+    if n <= 0:
+        raise ValueError("n must be positive")
+    if length <= 0.0:
+        raise ValueError("length must be positive")
+
+    xi = np.linspace(0.0, 1.0, n + 1)
+    if beta <= 0.0:
+        return length * xi
+
+    eta = 2.0 * xi - 1.0
+    s = 0.5 * (1.0 + np.tanh(beta * eta) / np.tanh(beta))
+    return length * s
+
+
+def _cluster_to_upper_end(n: int, length: float, beta: float) -> np.ndarray:
+    """Faces on [0, length] clustered near the upper end x=length."""
+    xi = np.linspace(0.0, 1.0, n + 1)
+    if beta <= 0.0:
+        return length * xi
+    s = np.tanh(beta * xi) / np.tanh(beta)
+    return length * s
+
+
+def _cluster_to_lower_end(n: int, length: float, beta: float) -> np.ndarray:
+    """Faces on [0, length] clustered near the lower end x=0."""
+    xi = np.linspace(0.0, 1.0, n + 1)
+    if beta <= 0.0:
+        return length * xi
+    s = 1.0 - (np.tanh(beta * (1.0 - xi)) / np.tanh(beta))
+    return length * s
+
+
+def stretched_faces_piecewise_focus(
+    n: int,
+    length: float,
+    beta: float,
+    focus: float,
+) -> np.ndarray:
+    """Piecewise monotonic faces clustered around an interior focus location.
+
+    The interval [0, length] is split at ``focus``. The left segment is
+    clustered toward ``focus`` from below, and the right segment is clustered
+    toward ``focus`` from above.
+    """
+    if n <= 0:
+        raise ValueError("n must be positive")
+    if length <= 0.0:
+        raise ValueError("length must be positive")
+
+    if beta <= 0.0:
+        return stretched_faces_tanh(n, length, beta=0.0)
+
+    eps = 1e-12 * max(1.0, length)
+    focus_clamped = float(np.clip(focus, eps, length - eps))
+
+    n_left = int(round(n * (focus_clamped / length)))
+    n_left = int(np.clip(n_left, 1, n - 1))
+    n_right = n - n_left
+
+    left_faces = _cluster_to_upper_end(n_left, focus_clamped, beta)
+    right_local = _cluster_to_lower_end(n_right, length - focus_clamped, beta)
+    right_faces = focus_clamped + right_local
+
+    faces = np.concatenate([left_faces[:-1], right_faces])
+    faces[0] = 0.0
+    faces[-1] = length
+    return faces
+
+
+def build_nonuniform_grid_metadata(
+    nx: int,
+    ny: int,
+    lx: float,
+    ly: float,
+    beta_x: float,
+    beta_y: float,
+    focus_x: float | None = None,
+    focus_y: float | None = None,
+) -> dict:
+    """Build serializable metadata for a 2-D non-uniform Cartesian grid.
+
+    Non-uniform spacing is clustered around the provided focus point.
+    """
+    fx = lx / 4.0 if focus_x is None else float(focus_x)
+    fy = ly / 2.0 if focus_y is None else float(focus_y)
+    xf = stretched_faces_piecewise_focus(nx, lx, beta_x, focus=fx)
+    yf = stretched_faces_piecewise_focus(ny, ly, beta_y, focus=fy)
+
+    grid = CartesianGrid(nx=nx, ny=ny, lx=lx, ly=ly, xf=xf, yf=yf)
+    metadata = grid.to_metadata()
+    metadata["grid_type"] = "nonuniform"
+    metadata["beta_x"] = float(beta_x)
+    metadata["beta_y"] = float(beta_y)
+    metadata["nonuniform_mode"] = "piecewise-cylinder"
+    metadata["focus_x"] = float(fx)
+    metadata["focus_y"] = float(fy)
+    metadata["dx"] = grid.dx_cells.copy()
+    metadata["dy"] = grid.dy_cells.copy()
+    return metadata

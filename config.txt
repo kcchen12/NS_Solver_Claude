@@ -3,12 +3,12 @@
 # Format: key = value
 
 # Grid parameters
-nx = 320
-ny = 128
+nx = 160
+ny = 64
 
 # Domain dimensions
-lx = 25.0
-ly = 10.0
+lx = 12.5
+ly = 5.0
 
 # Physics parameters
 re = 100.0
@@ -46,18 +46,20 @@ t_end = 100
 cfl = .5
 
 # I/O parameters
-save_dt = 0.25
+save_dt = 1.0
 # Grid metadata is written to outdir/uniform_grid.npz by pre_generate_grid.py
 # and also at main.py startup.
 outdir = output
+# Runtime nonuniform mode (piecewise-cylinder)
+runtime_nonuniform_mode = piecewise-cylinder
 
 # Features (true/false)
 cylinder = true
 # Optional cylinder center in physical units.
 # For a more benchmark-like Re_D=100 case, keep the cylinder well away
 # from the inlet/outlet and use a low blockage ratio.
-cylinder_center_x = 8.0
-cylinder_center_y = 5.0
+cylinder_center_x = 4.0
+cylinder_center_y = 2.5
 # Cylinder radius in physical units (set > 0 to override default ly/8)
 cylinder_radius = 0.5
 # If true, re is interpreted as Re_D based on cylinder diameter

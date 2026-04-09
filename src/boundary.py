@@ -184,7 +184,7 @@ def apply_velocity_bc(u: np.ndarray, v: np.ndarray,
     if bc.right == BCType.OUTFLOW:
         if dt is not None and str(bc.outflow_mode).lower() == OutflowMode.CONVECTIVE:
             Uc = _outflow_convective_speed(bc, bc.u_inf)
-            cfl = Uc * dt / grid.dx
+            cfl = Uc * dt / grid.dx_min
             u[nx, :] = u[nx, :] - cfl * (u[nx, :] - u[nx - 1, :])
         else:
             u[nx, :] = u[nx - 1, :]    # zero-gradient fallback
@@ -221,7 +221,7 @@ def apply_velocity_bc(u: np.ndarray, v: np.ndarray,
     elif bc.bottom == BCType.OUTFLOW:
         if dt is not None and str(bc.outflow_mode).lower() == OutflowMode.CONVECTIVE:
             Vc = _outflow_convective_speed(bc, bc.v_inf)
-            cfl = abs(Vc) * dt / grid.dy
+            cfl = abs(Vc) * dt / grid.dy_min
             v[:, 0] = v[:, 0] - cfl * (v[:, 0] - v[:, 1])
         else:
             v[:, 0] = v[:, 1]
@@ -245,7 +245,7 @@ def apply_velocity_bc(u: np.ndarray, v: np.ndarray,
     elif bc.top == BCType.OUTFLOW:
         if dt is not None and str(bc.outflow_mode).lower() == OutflowMode.CONVECTIVE:
             Vc = _outflow_convective_speed(bc, bc.v_inf)
-            cfl = Vc * dt / grid.dy
+            cfl = Vc * dt / grid.dy_min
             v[:, ny] = v[:, ny] - cfl * (v[:, ny] - v[:, ny - 1])
         else:
             v[:, ny] = v[:, ny - 1]
@@ -308,7 +308,7 @@ def apply_post_correction_bc(u: np.ndarray, v: np.ndarray,
     if bc.right == BCType.OUTFLOW:
         if dt is not None and str(bc.outflow_mode).lower() == OutflowMode.CONVECTIVE:
             Uc = _outflow_convective_speed(bc, bc.u_inf)
-            cfl = Uc * dt / grid.dx
+            cfl = Uc * dt / grid.dx_min
             u[nx, :] = u[nx, :] - cfl * (u[nx, :] - u[nx - 1, :])
         else:
             u[nx, :] = u[nx - 1, :]
@@ -328,7 +328,7 @@ def apply_post_correction_bc(u: np.ndarray, v: np.ndarray,
     elif bc.bottom == BCType.OUTFLOW:
         if dt is not None and str(bc.outflow_mode).lower() == OutflowMode.CONVECTIVE:
             Vc = _outflow_convective_speed(bc, bc.v_inf)
-            cfl = abs(Vc) * dt / grid.dy
+            cfl = abs(Vc) * dt / grid.dy_min
             v[:, 0] = v[:, 0] - cfl * (v[:, 0] - v[:, 1])
         else:
             v[:, 0] = v[:, 1]
@@ -341,7 +341,7 @@ def apply_post_correction_bc(u: np.ndarray, v: np.ndarray,
     elif bc.top == BCType.OUTFLOW:
         if dt is not None and str(bc.outflow_mode).lower() == OutflowMode.CONVECTIVE:
             Vc = _outflow_convective_speed(bc, bc.v_inf)
-            cfl = Vc * dt / grid.dy
+            cfl = Vc * dt / grid.dy_min
             v[:, ny] = v[:, ny] - cfl * (v[:, ny] - v[:, ny - 1])
         else:
             v[:, ny] = v[:, ny - 1]

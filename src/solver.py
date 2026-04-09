@@ -155,11 +155,13 @@ class FractionalStepSolver:
         # ----------------------------------------------------------------
         # Interior x-faces: i = 1 .. nx-1
         u_new = u_star.copy()
-        u_new[1:-1, :] -= dt * (phi[1:, :] - phi[:-1, :]) / grid.dx
+        dxc = np.diff(grid.xc)[:, np.newaxis]
+        u_new[1:-1, :] -= dt * (phi[1:, :] - phi[:-1, :]) / dxc
 
         # Interior y-faces: j = 1 .. ny-1
         v_new = v_star.copy()
-        v_new[:, 1:-1] -= dt * (phi[:, 1:] - phi[:, :-1]) / grid.dy
+        dyc = np.diff(grid.yc)[np.newaxis, :]
+        v_new[:, 1:-1] -= dt * (phi[:, 1:] - phi[:, :-1]) / dyc
 
         # ----------------------------------------------------------------
         # Step 4 — Pressure update
@@ -193,16 +195,16 @@ class FractionalStepSolver:
         # Interpolate u, v to cell centres for CFL estimate
         u_c = 0.5 * (self.u[:-1, :] + self.u[1:, :])
         v_c = 0.5 * (self.v[:, :-1] + self.v[:, 1:])
-        cfl_x = np.max(np.abs(u_c)) * dt / grid.dx
-        cfl_y = np.max(np.abs(v_c)) * dt / grid.dy
-        return max(cfl_x, cfl_y)
+        cfl_x = np.max(np.abs(u_c) * dt / grid.dx_cells[:, np.newaxis])
+        cfl_y = np.max(np.abs(v_c) * dt / grid.dy_cells[np.newaxis, :])
+        return float(max(cfl_x, cfl_y))
 
     def suggest_dt(self, cfl_target: float = 0.5, dt_max: float = 0.1) -> float:
         """Suggest a stable time step based on convective CFL and diffusion."""
         grid = self.grid
         u_max = max(np.max(np.abs(self.u)), 1e-12)
         v_max = max(np.max(np.abs(self.v)), 1e-12)
-        dt_conv = cfl_target * min(grid.dx / u_max, grid.dy / v_max)
+        dt_conv = cfl_target * min(grid.dx_min / u_max, grid.dy_min / v_max)
         dt_diff = 0.5 * cfl_target / \
-            (self.nu * (1.0 / grid.dx**2 + 1.0 / grid.dy**2))
+            (self.nu * (1.0 / grid.dx_min**2 + 1.0 / grid.dy_min**2))
         return min(dt_conv, dt_diff, dt_max)

@@ -131,7 +131,8 @@ class ImmersedBoundary:
         force_x = 0.0
         force_y = 0.0
         if dt is not None and dt > 0.0:
-            face_area = self.grid.dx * self.grid.dy
+            face_area = float(np.mean(self.grid.dx_cells) *
+                              np.mean(self.grid.dy_cells))
             force_x = rho * face_area * \
                 float(np.sum(u[self.mask_u] - u_body)) / dt
             force_y = rho * face_area * \

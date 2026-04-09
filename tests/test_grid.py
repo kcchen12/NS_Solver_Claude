@@ -1,8 +1,8 @@
 """Tests for CartesianGrid."""
 import numpy as np
 import pytest
-from src.grid import CartesianGrid
-from src.io_utils import load_grid_metadata, save_grid_metadata
+from src.grid import CartesianGrid, build_nonuniform_grid_metadata, stretched_faces_tanh
+from src.io_utils import load_grid_metadata, load_grid_metadata_dict, save_grid_metadata, save_grid_metadata_dict
 
 
 class TestCartesianGrid2D:
@@ -95,3 +95,56 @@ class TestCartesianGrid3D:
         g = CartesianGrid(4, 3)
         with pytest.raises(RuntimeError):
             g.zeros_w()
+
+
+class TestPreparedNonuniformGrid:
+    def test_stretched_faces_tanh_uniform_when_beta_nonpositive(self):
+        xf = stretched_faces_tanh(4, 1.0, beta=0.0)
+        assert np.allclose(xf, [0.0, 0.25, 0.5, 0.75, 1.0])
+
+    def test_nonuniform_metadata_has_expected_shapes(self):
+        meta = build_nonuniform_grid_metadata(
+            nx=8,
+            ny=4,
+            lx=2.0,
+            ly=1.0,
+            beta_x=2.0,
+            beta_y=1.5,
+        )
+        assert meta["grid_type"] == "nonuniform"
+        assert meta["xf"].shape == (9,)
+        assert meta["yf"].shape == (5,)
+        assert meta["dx"].shape == (8,)
+        assert meta["dy"].shape == (4,)
+        assert np.isclose(meta["xf"][0], 0.0)
+        assert np.isclose(meta["xf"][-1], 2.0)
+
+    def test_nonuniform_metadata_round_trip_dict_loader(self, tmp_path):
+        path = tmp_path / "nonuniform_grid.npz"
+        original = build_nonuniform_grid_metadata(
+            nx=8,
+            ny=4,
+            lx=2.0,
+            ly=1.0,
+            beta_x=2.0,
+            beta_y=1.0,
+        )
+        save_grid_metadata_dict(str(path), original)
+        loaded = load_grid_metadata_dict(str(path))
+        assert loaded["grid_type"] == "nonuniform"
+        assert np.allclose(loaded["xf"], original["xf"])
+        assert np.allclose(loaded["dy"], original["dy"])
+
+    def test_uniform_loader_rejects_nonuniform_metadata(self, tmp_path):
+        path = tmp_path / "nonuniform_grid.npz"
+        meta = build_nonuniform_grid_metadata(
+            nx=8,
+            ny=4,
+            lx=2.0,
+            ly=1.0,
+            beta_x=2.0,
+            beta_y=1.0,
+        )
+        save_grid_metadata_dict(str(path), meta)
+        with pytest.raises(ValueError):
+            load_grid_metadata(str(path))

@@ -60,9 +60,19 @@ cd NS_Solver
 python main.py
 ```
 
-Pre-generate the uniform grid metadata without running the solver:
+Run the solver on a non-uniform grid focused around the cylinder location:
+```bash
+python main.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0
+```
+
+Pre-generate prepared grid metadata without running the solver:
 ```bash
 python pre_generate_grid.py
+```
+
+Generate non-uniform prepared-grid metadata focused around the cylinder location:
+```bash
+python pre_generate_grid.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0
 ```
 
 Override config parameters from the command line:
@@ -90,6 +100,9 @@ All arguments are optional and override values in `config.txt`:
 --cfl FLOAT        CFL number for time stepping (default: from config)
 --save_dt FLOAT    Time interval between snapshots (default: from config)
 --outdir DIR       Output directory for snapshots (default: from config)
+--grid-type STR    Runtime grid type: uniform or nonuniform (default: from config)
+--beta-x FLOAT     Nonuniform x-stretch beta (default: from config)
+--beta-y FLOAT     Nonuniform y-stretch beta (default: from config)
 --cylinder BOOL    Enable immersed-boundary cylinder (default: from config)
 --cylinder-center-x FLOAT   Cylinder center x coordinate (default: from config or lx/4)
 --cylinder-center-y FLOAT   Cylinder center y coordinate (default: from config or ly/2)
@@ -132,7 +145,7 @@ Configuration is specified in `config.txt`. See `config_example.txt` for a compl
 
 ### Pre-Generating The Grid
 
-To pre-generate the uniform grid before running the solver:
+To pre-generate the default uniform runtime grid metadata:
 
 ```bash
 python pre_generate_grid.py
@@ -144,6 +157,20 @@ This uses the same `config.txt` and command-line overrides as `main.py`, then wr
 outdir/uniform_grid.npz
 ```
 
+To pre-generate non-uniform prepared-grid metadata for setup/post-processing workflows:
+
+```bash
+python pre_generate_grid.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0
+```
+
+This writes:
+
+```text
+outdir/nonuniform_grid.npz
+```
+
+The runtime solver can now run on non-uniform 2-D grids by setting `--grid-type nonuniform` (or config equivalents).
+
 Examples:
 
 ```bash
@@ -152,6 +179,9 @@ python pre_generate_grid.py
 
 # Override the grid and output directory
 python pre_generate_grid.py --nx 256 --ny 128 --lx 25.0 --ly 10.0 --outdir output
+
+# Build a non-uniform prepared grid in output/nonuniform_grid.npz
+python pre_generate_grid.py --grid-type nonuniform --beta-x 3.0 --beta-y 1.5
 ```
 
 After that, run the solver normally:

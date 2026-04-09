@@ -56,10 +56,10 @@ def load_hdf5(path: str):
     if not _HDF5_AVAILABLE:
         raise ImportError("h5py is required for HDF5 input.")
     with h5py.File(path, "r") as f:
-        u    = f["u"][:]
-        v    = f["v"][:]
-        p    = f["p"][:]
-        t    = float(f.attrs["t"])
+        u = f["u"][:]
+        v = f["v"][:]
+        p = f["p"][:]
+        t = float(f.attrs["t"])
         meta = dict(f.attrs)
     return u, v, p, t, meta
 
@@ -100,8 +100,14 @@ def save_grid_metadata(path: str, grid) -> None:
     np.savez_compressed(path, **grid.to_metadata())
 
 
-def load_grid_metadata(path: str) -> CartesianGrid:
-    """Load a prepared grid description from a compressed NumPy archive."""
+def save_grid_metadata_dict(path: str, metadata: dict) -> None:
+    """Save arbitrary prepared-grid metadata to a compressed NumPy archive."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    np.savez_compressed(path, **metadata)
+
+
+def load_grid_metadata_dict(path: str) -> dict:
+    """Load prepared-grid metadata as a raw dictionary."""
     with np.load(path) as data:
         metadata = {}
         for key in data.files:
@@ -110,6 +116,24 @@ def load_grid_metadata(path: str) -> CartesianGrid:
                 metadata[key] = value.item()
             else:
                 metadata[key] = value.copy()
+    return metadata
+
+
+def load_grid_metadata(path: str) -> CartesianGrid:
+    """Load a prepared uniform grid description from a compressed NumPy archive."""
+    metadata = load_grid_metadata_dict(path)
+    grid_type = str(metadata.get("grid_type", "uniform"))
+    if grid_type != "uniform":
+        raise ValueError(
+            "load_grid_metadata only supports uniform grids. "
+            "Use load_grid_metadata_dict for non-uniform prepared-grid metadata."
+        )
+    return CartesianGrid.from_metadata(metadata)
+
+
+def load_prepared_grid(path: str) -> CartesianGrid:
+    """Load prepared-grid metadata and construct a CartesianGrid."""
+    metadata = load_grid_metadata_dict(path)
     return CartesianGrid.from_metadata(metadata)
 
 

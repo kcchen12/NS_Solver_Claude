@@ -2,12 +2,12 @@
 # Based on the current working setup, with a longer end time for reference.
 
 # Grid parameters
-nx = 128
-ny = 64
+nx = 320
+ny = 128
 
 # Domain dimensions
-lx = 4.0
-ly = 2.0
+lx = 25.0
+ly = 10.0
 
 # Physics parameters
 re = 100.0
@@ -21,7 +21,7 @@ bc_top = farfield
 
 # Inflow/farfield velocity components
 inflow_u = 1.0
-inflow_v = 0.001
+inflow_v = 0.000
 inflow_w = 0.0
 
 # Wall behavior (used where face type is 'wall')
@@ -45,6 +45,23 @@ save_dt = 0.25
 # Grid metadata is written to outdir/uniform_grid.npz by pre_generate_grid.py
 # and also at main.py startup.
 outdir = output
+# Prepared-grid generation mode for pre_generate_grid.py:
+#   uniform | nonuniform
+pre_grid_type = uniform
+# Non-uniform tanh stretching strengths used when pre_grid_type=nonuniform.
+# Set <=0 for uniform spacing in a direction.
+pre_nonuniform_beta_x = 2.0
+pre_nonuniform_beta_y = 2.0
+# Nonuniform mapping mode is piecewise-cylinder (clusters around focus/cylinder location)
+pre_nonuniform_mode = piecewise-cylinder
+# Runtime grid selection for main.py:
+#   uniform | nonuniform
+runtime_grid_type = uniform
+# Runtime non-uniform tanh stretch betas (used when runtime_grid_type=nonuniform)
+runtime_nonuniform_beta_x = 2.0
+runtime_nonuniform_beta_y = 2.0
+# Runtime nonuniform mapping mode (piecewise-cylinder)
+runtime_nonuniform_mode = piecewise-cylinder
 
 # Features (true/false)
 cylinder = true
