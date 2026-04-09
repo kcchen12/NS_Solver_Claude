@@ -60,6 +60,11 @@ cd NS_Solver
 python main.py
 ```
 
+Pre-generate the uniform grid metadata without running the solver:
+```bash
+python pre_generate_grid.py
+```
+
 Override config parameters from the command line:
 ```bash
 python main.py --nx 128 --ny 64 --re 200 --cylinder true
@@ -98,6 +103,7 @@ Configuration is specified in `config.txt`. See `config_example.txt` for a compl
 ### Grid Parameters
 - **nx** - Number of grid cells in x direction (default: 64)
 - **ny** - Number of grid cells in y direction (default: 32)
+- Run `python pre_generate_grid.py` to write the current uniform grid to `outdir/uniform_grid.npz`
 
 ### Domain Dimensions
 - **lx** - Physical domain length in x direction (default: 4.0)
@@ -122,6 +128,39 @@ Configuration is specified in `config.txt`. See `config_example.txt` for a compl
 ### I/O Parameters
 - **save_dt** - Time interval between snapshot outputs (default: 0.5)
 - **outdir** - Directory where snapshots are saved (default: output)
+- **uniform_grid.npz** - Grid metadata file written into `outdir` by `pre_generate_grid.py` and at `main.py` startup
+
+### Pre-Generating The Grid
+
+To pre-generate the uniform grid before running the solver:
+
+```bash
+python pre_generate_grid.py
+```
+
+This uses the same `config.txt` and command-line overrides as `main.py`, then writes:
+
+```text
+outdir/uniform_grid.npz
+```
+
+Examples:
+
+```bash
+# Use grid settings from config.txt
+python pre_generate_grid.py
+
+# Override the grid and output directory
+python pre_generate_grid.py --nx 256 --ny 128 --lx 25.0 --ly 10.0 --outdir output
+```
+
+After that, run the solver normally:
+
+```bash
+python main.py
+```
+
+For the current uniform-grid solver, this is mainly a workflow/documentation improvement. It gives you a reusable grid metadata file, but by itself it does not meaningfully reduce solver runtime.
 
 ### Features
 - **cylinder** - Enable immersed-boundary cylinder at domain center (default: false)

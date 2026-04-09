@@ -46,7 +46,7 @@ from src.grid import CartesianGrid
 from src.boundary import BoundaryConfig, BCType
 from src.solver import FractionalStepSolver
 from src.ibm import ImmersedBoundary
-from src.io_utils import save_snapshot
+from src.io_utils import save_snapshot, save_grid_metadata, load_grid_metadata
 from src.parallel import ParallelDecomposition
 from src.config import ConfigParser
 
@@ -175,11 +175,42 @@ def parse_args():
     return p.parse_args()
 
 
+def _grid_metadata_path(args) -> str:
+    return os.path.join(args.outdir, "uniform_grid.npz")
+
+
+def _grid_matches_args(grid, args) -> bool:
+    return (
+        grid.nx == args.nx and
+        grid.ny == args.ny and
+        np.isclose(grid.lx, args.lx) and
+        np.isclose(grid.ly, args.ly)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
-def run(args):
+def prepare_uniform_grid(args):
+    """Build the runtime grid and write its metadata before the solver starts."""
+    grid = CartesianGrid(nx=args.nx, ny=args.ny, lx=args.lx, ly=args.ly)
+    os.makedirs(args.outdir, exist_ok=True)
+    save_grid_metadata(_grid_metadata_path(args), grid)
+    return grid
+
+
+def get_runtime_grid(args):
+    """Load a pre-generated grid when available, otherwise create one."""
+    grid_path = _grid_metadata_path(args)
+    if os.path.exists(grid_path):
+        grid = load_grid_metadata(grid_path)
+        if _grid_matches_args(grid, args):
+            return grid, True
+    return prepare_uniform_grid(args), False
+
+
+def run(args, grid=None, grid_loaded_from_file=False):
     # ------------------------------------------------------------------
     # MPI setup
     # ------------------------------------------------------------------
@@ -198,13 +229,14 @@ def run(args):
         print(f"  End time      : {args.t_end}")
         print(f"  MPI ranks     : {decomp.size}")
         print(f"  IBM cylinder  : {args.cylinder}")
+        print(f"  Grid source   : {'pre-generated file' if grid_loaded_from_file else 'generated at startup'}")
         print("=" * 60)
 
     # ------------------------------------------------------------------
     # Grid
     # ------------------------------------------------------------------
-    grid = CartesianGrid(nx=args.nx, ny=args.ny,
-                         lx=args.lx, ly=args.ly)
+    if grid is None:
+        grid, grid_loaded_from_file = get_runtime_grid(args)
 
     # ------------------------------------------------------------------
     # Boundary conditions (fully configurable from config/CLI)
@@ -402,4 +434,5 @@ def _plot_results(solver, grid, args):
 
 if __name__ == "__main__":
     args = parse_args()
-    run(args)
+    runtime_grid, loaded_from_file = get_runtime_grid(args)
+    run(args, grid=runtime_grid, grid_loaded_from_file=loaded_from_file)

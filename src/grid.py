@@ -108,6 +108,39 @@ class CartesianGrid:
             raise RuntimeError("w-velocity only exists in 3-D mode.")
         return np.zeros(self.w_shape)
 
+    def to_metadata(self) -> dict:
+        """Return serializable metadata describing the uniform grid."""
+        return {
+            "nx": self.nx,
+            "ny": self.ny,
+            "nz": self.nz,
+            "lx": self.lx,
+            "ly": self.ly,
+            "lz": self.lz,
+            "dx": self.dx,
+            "dy": self.dy,
+            "dz": self.dz,
+            "is_3d": self.is_3d,
+            "xf": self.xf.copy(),
+            "yf": self.yf.copy(),
+            "zf": self.zf.copy(),
+            "xc": self.xc.copy(),
+            "yc": self.yc.copy(),
+            "zc": self.zc.copy(),
+        }
+
+    @classmethod
+    def from_metadata(cls, metadata: dict) -> "CartesianGrid":
+        """Rebuild a uniform grid from saved metadata."""
+        return cls(
+            nx=int(metadata["nx"]),
+            ny=int(metadata["ny"]),
+            nz=int(metadata.get("nz", 1)),
+            lx=float(metadata["lx"]),
+            ly=float(metadata["ly"]),
+            lz=float(metadata.get("lz", 1.0)),
+        )
+
     def __repr__(self) -> str:
         dim = "3D" if self.is_3d else "2D"
         return (f"CartesianGrid({dim}, nx={self.nx}, ny={self.ny}, nz={self.nz}, "

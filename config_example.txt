@@ -42,6 +42,8 @@ cfl = 0.5
 
 # I/O parameters
 save_dt = 0.25
+# Grid metadata is written to outdir/uniform_grid.npz by pre_generate_grid.py
+# and also at main.py startup.
 outdir = output
 
 # Features (true/false)

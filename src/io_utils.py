@@ -19,6 +19,8 @@ Each snapshot stores:
 import os
 import numpy as np
 
+from src.grid import CartesianGrid
+
 try:
     import h5py
     _HDF5_AVAILABLE = True
@@ -90,6 +92,25 @@ def load_numpy(path: str):
     meta = {k[5:]: data[k].item() for k in data.files
             if k.startswith("meta_")}
     return u, v, p, t, meta
+
+
+def save_grid_metadata(path: str, grid) -> None:
+    """Save a prepared grid description to a compressed NumPy archive."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    np.savez_compressed(path, **grid.to_metadata())
+
+
+def load_grid_metadata(path: str) -> CartesianGrid:
+    """Load a prepared grid description from a compressed NumPy archive."""
+    with np.load(path) as data:
+        metadata = {}
+        for key in data.files:
+            value = data[key]
+            if np.ndim(value) == 0:
+                metadata[key] = value.item()
+            else:
+                metadata[key] = value.copy()
+    return CartesianGrid.from_metadata(metadata)
 
 
 # ---------------------------------------------------------------------------

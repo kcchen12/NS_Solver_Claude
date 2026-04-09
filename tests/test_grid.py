@@ -2,6 +2,7 @@
 import numpy as np
 import pytest
 from src.grid import CartesianGrid
+from src.io_utils import load_grid_metadata, save_grid_metadata
 
 
 class TestCartesianGrid2D:
@@ -56,6 +57,26 @@ class TestCartesianGrid2D:
         g = CartesianGrid(4, 3)
         p = g.zeros_p()
         assert p.shape == (4, 3)
+
+    def test_metadata_contains_coordinates(self):
+        g = CartesianGrid(4, 2, lx=1.0, ly=1.0)
+        meta = g.to_metadata()
+        assert meta["nx"] == 4
+        assert meta["ny"] == 2
+        assert np.allclose(meta["xf"], [0.0, 0.25, 0.5, 0.75, 1.0])
+        assert np.allclose(meta["yc"], [0.25, 0.75])
+
+    def test_grid_metadata_round_trip(self, tmp_path):
+        path = tmp_path / "uniform_grid.npz"
+        original = CartesianGrid(4, 2, lx=1.0, ly=1.0)
+        save_grid_metadata(str(path), original)
+        loaded = load_grid_metadata(str(path))
+        assert loaded.nx == original.nx
+        assert loaded.ny == original.ny
+        assert np.isclose(loaded.lx, original.lx)
+        assert np.isclose(loaded.ly, original.ly)
+        assert np.allclose(loaded.xf, original.xf)
+        assert np.allclose(loaded.yc, original.yc)
 
 
 class TestCartesianGrid3D:
