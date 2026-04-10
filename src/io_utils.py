@@ -84,13 +84,17 @@ def load_numpy(path: str):
 
     Returns (u, v, p, t, meta).
     """
-    data = np.load(path)
-    u = data["u"]
-    v = data["v"]
-    p = data["p"]
-    t = float(data["t"])
-    meta = {k[5:]: data[k].item() for k in data.files
-            if k.startswith("meta_")}
+    with np.load(path, allow_pickle=False) as data:
+        u = data["u"].copy()
+        v = data["v"].copy()
+        p = data["p"].copy()
+        t = float(data["t"])
+        meta = {}
+        for key in data.files:
+            if not key.startswith("meta_"):
+                continue
+            value = data[key]
+            meta[key[5:]] = value.item() if np.ndim(value) == 0 else value.copy()
     return u, v, p, t, meta
 
 
@@ -108,7 +112,7 @@ def save_grid_metadata_dict(path: str, metadata: dict) -> None:
 
 def load_grid_metadata_dict(path: str) -> dict:
     """Load prepared-grid metadata as a raw dictionary."""
-    with np.load(path) as data:
+    with np.load(path, allow_pickle=False) as data:
         metadata = {}
         for key in data.files:
             value = data[key]

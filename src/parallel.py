@@ -39,6 +39,16 @@ except Exception:
     _MPI_AVAILABLE = False
 
 
+def _mpi_dtype_for(array: np.ndarray):
+    """Return the matching MPI datatype for a NumPy array dtype."""
+    if not _MPI_AVAILABLE:
+        return None
+    dtype = np.dtype(array.dtype)
+    if not np.issubdtype(dtype, np.number):
+        raise TypeError(f"Unsupported MPI dtype: {dtype}")
+    return MPI._typedict[dtype.char]
+
+
 class ParallelDecomposition:
     """
     1-D domain decomposition in the y-direction.
@@ -99,28 +109,35 @@ class ParallelDecomposition:
         if not self.is_parallel or not _MPI_AVAILABLE:
             return u_local  # no-op in serial
 
-        from mpi4py import MPI
         comm = self.comm
         rank = self.rank
         size = self.size
         nx1 = u_local.shape[0]
-        ny_l = u_local.shape[1]
 
         ghost_bot = np.empty(nx1, dtype=u_local.dtype)
         ghost_top = np.empty(nx1, dtype=u_local.dtype)
 
-        # Send bottom row to rank-1, receive from rank+1 (upward exchange)
-        if rank < size - 1:
-            comm.Send(u_local[:, -1].copy(), dest=rank + 1, tag=0)
         if rank > 0:
-            comm.Recv(ghost_bot, source=rank - 1, tag=0)
+            comm.Sendrecv(
+                sendbuf=u_local[:, 0].copy(),
+                dest=rank - 1,
+                sendtag=1,
+                recvbuf=ghost_bot,
+                source=rank - 1,
+                recvtag=0,
+            )
         else:
             ghost_bot[:] = u_local[:, 0]  # reflect at bottom (Neumann)
 
-        if rank > 0:
-            comm.Send(u_local[:, 0].copy(), dest=rank - 1, tag=1)
         if rank < size - 1:
-            comm.Recv(ghost_top, source=rank + 1, tag=1)
+            comm.Sendrecv(
+                sendbuf=u_local[:, -1].copy(),
+                dest=rank + 1,
+                sendtag=0,
+                recvbuf=ghost_top,
+                source=rank + 1,
+                recvtag=1,
+            )
         else:
             ghost_top[:] = u_local[:, -1]  # reflect at top
 
@@ -143,9 +160,9 @@ class ParallelDecomposition:
         if not self.is_parallel or not _MPI_AVAILABLE:
             return field_local
 
-        from mpi4py import MPI
         nx = field_local.shape[0]
         recvbuf = None
+        mpi_dtype = _mpi_dtype_for(field_local)
         if self.rank == 0:
             recvbuf = np.empty((nx, self.ny_global), dtype=field_local.dtype)
 
@@ -153,8 +170,8 @@ class ParallelDecomposition:
         displs = [sum(counts[:r]) for r in range(self.size)]
 
         self.comm.Gatherv(
-            field_local.ravel(),
-            [recvbuf, counts, displs, MPI.DOUBLE] if self.rank == 0 else None,
+            field_local.ravel(order="C"),
+            [recvbuf, counts, displs, mpi_dtype] if self.rank == 0 else None,
             root=0
         )
         if self.rank == 0:
@@ -169,14 +186,18 @@ class ParallelDecomposition:
         if not self.is_parallel or not _MPI_AVAILABLE:
             return field_global
 
-        from mpi4py import MPI
         counts = [nx * n for n in self.ny_local_list]
         displs = [sum(counts[:r]) for r in range(self.size)]
 
-        sendbuf = field_global.ravel() if self.rank == 0 else None
+        if self.rank == 0 and field_global is not None:
+            mpi_dtype = _mpi_dtype_for(field_global)
+        else:
+            mpi_dtype = _mpi_dtype_for(np.empty(1, dtype=dtype))
+
+        sendbuf = field_global.ravel(order="C") if self.rank == 0 else None
         recvbuf = np.empty(nx * self.ny_local, dtype=dtype)
         self.comm.Scatterv(
-            [sendbuf, counts, displs, MPI.DOUBLE],
+            [sendbuf, counts, displs, mpi_dtype],
             recvbuf,
             root=0
         )

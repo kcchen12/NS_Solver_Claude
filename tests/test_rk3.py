@@ -68,3 +68,14 @@ class TestSSPRK3:
         assert np.allclose(u_new[-1, :], u0[-1, :])
         assert np.allclose(v_new[:, 0],  v0[:, 0])
         assert np.allclose(v_new[:, -1], v0[:, -1])
+
+    def test_invalid_rhs_shape_raises(self):
+        """A malformed RHS should fail fast with a clear error."""
+        def bad_rhs(u, v):
+            return np.zeros((u.shape[0] - 1, u.shape[1])), \
+                   np.zeros((v.shape[0], v.shape[1] - 2))
+
+        u0 = np.random.rand(5, 4)
+        v0 = np.random.rand(4, 5)
+        with pytest.raises(ValueError):
+            ssp_rk3_step(bad_rhs, u0, v0, dt=0.1)

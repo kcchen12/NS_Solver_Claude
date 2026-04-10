@@ -23,6 +23,8 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import numpy as np
 from scipy.signal import lombscargle
 
+from src.config import ConfigParser
+
 
 DEFAULT_RESULTS_DIR = "results"
 
@@ -81,7 +83,7 @@ def _collect_snapshots(indir: str, pattern: str) -> List[Tuple[float, str]]:
     for path in candidates:
         t = _time_from_filename(path)
         if t is None:
-            with np.load(path) as data:
+            with np.load(path, allow_pickle=False) as data:
                 t = float(data["t"])
         by_time[t] = path
 
@@ -96,7 +98,7 @@ def _safe_scalar(data: np.lib.npyio.NpzFile, key: str) -> Optional[float]:
 
 def _load_snapshot_grid_metadata(first_path: str) -> Tuple[int, int, float, float]:
     """Read grid dimensions and domain size from one snapshot."""
-    with np.load(first_path) as data:
+    with np.load(first_path, allow_pickle=False) as data:
         p = data["p"]
         nx = int(p.shape[0])
         ny = int(p.shape[1])
@@ -113,35 +115,41 @@ def _load_snapshot_grid_metadata(first_path: str) -> Tuple[int, int, float, floa
 
 
 def _read_config(config_path: str) -> Dict[str, float]:
-    """Parse config file and return dictionary of key-value pairs."""
-    config = {}
-    if not os.path.exists(config_path):
-        return config
-
-    try:
-        with open(config_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                if '=' in line:
-                    key, val = line.split('=', 1)
-                    key = key.strip()
-                    val = val.strip().lower()
-
-                    if val in ('true', 'yes', '1'):
-                        config[key] = 1.0
-                    elif val in ('false', 'no', '0'):
-                        config[key] = 0.0
-                    else:
-                        try:
-                            config[key] = float(val)
-                        except ValueError:
-                            pass
-    except Exception:
-        pass
-
+    """Parse numeric/bool config values that aerodynamic post-processing uses."""
+    parser = ConfigParser(config_path)
+    config: Dict[str, float] = {}
+    for key, raw_value in parser.get_all().items():
+        bool_value = parser.get(key, None, bool)
+        if isinstance(bool_value, bool):
+            config[key] = 1.0 if bool_value else 0.0
+            continue
+        float_value = parser.get(key, None, float)
+        if float_value is not None:
+            config[key] = float(float_value)
+            continue
+        try:
+            config[key] = float(raw_value)
+        except (TypeError, ValueError):
+            continue
     return config
+
+
+def _build_uniform_face_and_center_coords(
+    nx: int,
+    ny: int,
+    lx: float,
+    ly: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    xf = np.linspace(0.0, lx, nx + 1)
+    yf = np.linspace(0.0, ly, ny + 1)
+    xc = 0.5 * (xf[:-1] + xf[1:])
+    yc = 0.5 * (yf[:-1] + yf[1:])
+    return xf, xc, yf, yc
+
+
+def _load_snapshot_fields(path: str, *field_names: str) -> tuple[np.ndarray, ...]:
+    with np.load(path, allow_pickle=False) as data:
+        return tuple(np.array(data[name], copy=True) for name in field_names)
 
 
 def _resolve_cylinder_radius(config: Dict[str, float], ly: float) -> float:
@@ -276,10 +284,7 @@ def _extract_probe_series(
         nan_vals = np.full(n, np.nan, dtype=float)
         return times, nan_vals.copy(), nan_vals.copy(), nan_vals.copy()
 
-    xf = np.linspace(0.0, lx, nx + 1)
-    xc = 0.5 * (xf[:-1] + xf[1:])
-    yf = np.linspace(0.0, ly, ny + 1)
-    yc = 0.5 * (yf[:-1] + yf[1:])
+    xf, xc, yf, yc = _build_uniform_face_and_center_coords(nx, ny, lx, ly)
 
     u_plan = _build_bilinear_plan(xf, yc, probe_x, probe_y)
     v_plan = _build_bilinear_plan(xc, yf, probe_x, probe_y)
@@ -291,10 +296,7 @@ def _extract_probe_series(
     p_vals = np.empty(n, dtype=float)
 
     for k, (t, path) in enumerate(snapshots_list):
-        with np.load(path) as data:
-            u = data["u"]
-            v = data["v"]
-            p = data["p"]
+        u, v, p = _load_snapshot_fields(path, "u", "v", "p")
 
         u_probe = _apply_bilinear_plan(u, u_plan)
         v_probe = _apply_bilinear_plan(v, v_plan)
@@ -392,7 +394,7 @@ def _compute_forces(
     force_plan: SurfaceForcePlan,
 ) -> Tuple[float, float]:
     """Compute x and y forces from a single snapshot."""
-    with np.load(snapshot_path) as data:
+    with np.load(snapshot_path, allow_pickle=False) as data:
         fx_meta = _safe_scalar(data, "meta_ibm_force_x")
         fy_meta = _safe_scalar(data, "meta_ibm_force_y")
         if fx_meta is not None and fy_meta is not None:
@@ -440,10 +442,7 @@ def _extract_combined_series(
     t, u_probe, v_probe, p_probe = _extract_probe_series(
         snapshots, nx, ny, lx, ly, probe_x, probe_y
     )
-    xf = np.linspace(0.0, lx, nx + 1)
-    xc = 0.5 * (xf[:-1] + xf[1:])
-    yf = np.linspace(0.0, ly, ny + 1)
-    yc = 0.5 * (yf[:-1] + yf[1:])
+    _, xc, _, yc = _build_uniform_face_and_center_coords(nx, ny, lx, ly)
     force_plan = _build_surface_force_plan(xc, yc, geom)
 
     n = len(snapshots)

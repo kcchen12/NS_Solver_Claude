@@ -1,5 +1,5 @@
-# NS_Solver Example Configuration File
-# Based on the current working setup, with a longer end time for reference.
+# NS_Solver Example Runtime Configuration
+# Recommended example using the current unified config keys.
 
 # Grid parameters
 nx = 320
@@ -21,13 +21,13 @@ bc_top = farfield
 
 # Inflow/farfield velocity components
 inflow_u = 1.0
-inflow_v = 0.000
+inflow_v = 0.0
+initial_v_perturbation_pct = 2.0
 inflow_w = 0.0
 
 # Wall behavior (used where face type is 'wall')
 # wall_slip_mode: no-slip | free-slip
 wall_slip_mode = no-slip
-# If true, allows non-zero normal velocity at wall boundaries
 wall_penetration = false
 wall_normal_velocity = 0.0
 
@@ -37,59 +37,35 @@ outflow_mode = convective
 outflow_speed = 1.0
 
 # Time integration
-t_end = 150
+t_end = 100.0
 cfl = 0.5
 
 # I/O parameters
-save_dt = 0.25
-# Grid metadata is written to outdir/uniform_grid.npz by pre_generate_grid.py
-# and also at main.py startup.
+save_dt = 0.02
 outdir = output
-# Unified grid controls (used by both main.py and pre_generate_grid.py)
+
+# Unified grid controls used by both main.py and pre_generate_grid.py
 # uniform_grid = true  -> uniform mesh
-# uniform_grid = false -> nonuniform mesh
-uniform_grid = true
-# Nonuniform density controls (smooth center-density boost)
-# Set <=0 in a direction to make that direction uniform.
+# uniform_grid = false -> nonuniform center-band mesh
+uniform_grid = false
 grid_beta_x = 2.0
 grid_beta_y = 2.0
-# Fraction of each domain direction covered by the refined center band.
-# Example: 0.333333 refines the middle third.
 grid_band_fraction_x = 0.333333
 grid_band_fraction_y = 0.333333
-# Prepared-grid generation mode for pre_generate_grid.py:
-#   uniform | nonuniform
-pre_grid_type = uniform
-# Non-uniform center-density boosts used when pre_grid_type=nonuniform.
-# Set <=0 for uniform spacing in a direction.
-pre_nonuniform_beta_x = 2.0
-pre_nonuniform_beta_y = 2.0
-# Nonuniform mapping mode is center-band (clusters in a rectangular interior band)
-pre_nonuniform_mode = center-band
-# Runtime grid selection for main.py:
-#   uniform | nonuniform
-runtime_grid_type = uniform
-# Runtime non-uniform center-density boosts (used when runtime_grid_type=nonuniform)
-runtime_nonuniform_beta_x = 2.0
-runtime_nonuniform_beta_y = 2.0
-# Runtime nonuniform mapping mode (center-band)
-runtime_nonuniform_mode = center-band
+
+# Optional legacy compatibility keys still exist in the parser, but the
+# unified keys above are the recommended way to configure new runs.
 
 # Features (true/false)
 cylinder = true
-# Optional cylinder center in physical units.
-# If omitted, defaults to (lx/4, ly/2).
-# cylinder_center_x = 1.0
-# cylinder_center_y = 1.0
-# Cylinder radius in physical units (set > 0 to override default ly/8)
+cylinder_center_x = 8.0
+cylinder_center_y = 5.0
 cylinder_radius = 0.5
-# If true, re is interpreted as Re_D based on cylinder diameter
 re_is_cylinder_based = true
-# Aerodynamic post-processing normalization (used by analyze_aerodynamics.py)
-# Set >0 to force characteristic length L in St=fL/U and coefficient scaling.
-# Example for legacy normalization: aero_length_scale = 0.5
-# aero_length_scale = -1
-# If true, use L = ly/4 for post-processing when aero_length_scale is not set.
-# aero_use_cylinder_diameter = false
 plot = true
 verbose = true
+
+# Optional aerodynamic post-processing normalization used by
+# analyze_aerodynamics.py when needed.
+# aero_length_scale = 1.0
+# aero_use_cylinder_diameter = true

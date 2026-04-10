@@ -96,6 +96,33 @@ class TestPoissonSolver:
         phi = ps.solve(rhs)
         assert np.allclose(phi, 0.0, atol=1e-12)
 
+    def test_pure_neumann_problem_returns_finite_solution(self):
+        """Pure Neumann pressure solve should be regularized and remain finite."""
+        from src.poisson import PoissonSolver
+
+        g = CartesianGrid(8, 6, lx=1.0, ly=1.0)
+        bc = BoundaryConfig(
+            left=BCType.INFLOW,
+            right=BCType.INFLOW,
+            bottom=BCType.WALL,
+            top=BCType.WALL,
+            u_inf=1.0,
+            v_inf=0.0,
+        )
+        ps = PoissonSolver(g, bc)
+        rhs = np.random.rand(*g.p_shape)
+        phi = ps.solve(rhs)
+        assert np.all(np.isfinite(phi))
+
+    def test_poisson_rejects_wrong_rhs_shape(self):
+        from src.poisson import PoissonSolver
+
+        g = CartesianGrid(8, 6, lx=1.0, ly=1.0)
+        bc = channel_bc()
+        ps = PoissonSolver(g, bc)
+        with pytest.raises(ValueError):
+            ps.solve(np.zeros((g.nx + 1, g.ny)))
+
 
 # ---------------------------------------------------------------------------
 # IBM forcing

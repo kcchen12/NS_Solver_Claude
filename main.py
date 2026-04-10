@@ -39,7 +39,6 @@ Command-line arguments override config file values::
 
 import argparse
 import os
-import sys
 import numpy as np
 
 from src.grid import CartesianGrid, build_nonuniform_grid_metadata
@@ -57,6 +56,10 @@ from src.parallel import ParallelDecomposition
 from src.config import ConfigParser
 from analyze_aerodynamics import run_analysis as run_aero_analysis
 from view_snapshot_viewer import find_latest_snapshot, plot_coeff_history, plot_snapshot_key
+
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+RESULTS_DIR = os.path.join(SCRIPT_DIR, "results")
 
 
 def _normalize_bc_type(raw_value: str, default: str) -> str:
@@ -90,16 +93,15 @@ def parse_args():
             raise argparse.ArgumentTypeError('Boolean value expected.')
 
     # Get the directory where this script is located
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    default_config = os.path.join(script_dir, "config.txt")
-    default_outdir = os.path.join(script_dir, "output")
+    default_config = os.path.join(SCRIPT_DIR, "config.txt")
+    default_outdir = os.path.join(SCRIPT_DIR, "output")
 
     # First parse just the config file paths
     p_pre = argparse.ArgumentParser(add_help=False)
     p_pre.add_argument("--config", type=str, default=default_config,
                        help="Path to configuration file")
     p_pre.add_argument("--post-config", type=str,
-                       default=os.path.join(script_dir, "post_config.txt"),
+                       default=os.path.join(SCRIPT_DIR, "post_config.txt"),
                        help="Path to post-processing configuration file")
     args_pre, remaining = p_pre.parse_known_args()
 
@@ -279,6 +281,37 @@ def _expected_nonuniform_band(args) -> tuple[float, float, float, float]:
     return start_x, end_x, start_y, end_y
 
 
+def _ensure_results_dir() -> str:
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    return RESULTS_DIR
+
+
+def _resolve_cylinder_geometry(args) -> tuple[float, float, float]:
+    cx = args.cylinder_center_x if args.cylinder_center_x >= 0.0 else args.lx / 4.0
+    cy = args.cylinder_center_y if args.cylinder_center_y >= 0.0 else args.ly / 2.0
+    radius = args.cylinder_radius if args.cylinder_radius > 0.0 else args.ly / 8.0
+    return cx, cy, radius
+
+
+def _kinematic_viscosity(args, inflow_u: float, cylinder_radius: float | None) -> float:
+    if args.cylinder and args.re_is_cylinder_based and cylinder_radius is not None:
+        return inflow_u * (2.0 * cylinder_radius) / args.re
+    return 1.0 / args.re
+
+
+def _snapshot_metadata(args, solver) -> dict:
+    return {
+        "t": solver.t,
+        "nx": args.nx,
+        "ny": args.ny,
+        "lx": args.lx,
+        "ly": args.ly,
+        "re": args.re,
+        "ibm_force_x": solver.last_ibm_force_x,
+        "ibm_force_y": solver.last_ibm_force_y,
+    }
+
+
 def _grid_matches_args(metadata: dict, grid, args) -> bool:
     metadata_type = str(metadata.get("grid_type", "uniform")).strip().lower()
 
@@ -429,9 +462,7 @@ def run(args, grid=None, grid_loaded_from_file=False):
     ibm = ImmersedBoundary(grid)
     r = None
     if args.cylinder:
-        cx = args.cylinder_center_x if args.cylinder_center_x >= 0.0 else args.lx / 4.0
-        cy = args.cylinder_center_y if args.cylinder_center_y >= 0.0 else args.ly / 2.0
-        r = args.cylinder_radius if args.cylinder_radius > 0.0 else args.ly / 8.0
+        cx, cy, r = _resolve_cylinder_geometry(args)
         ibm.add_circle(cx, cy, r)
         if is_root and args.verbose:
             print(f"  IBM cylinder: centre=({cx:.2f},{cy:.2f}), r={r:.4f}")
@@ -439,11 +470,7 @@ def run(args, grid=None, grid_loaded_from_file=False):
     # ------------------------------------------------------------------
     # Solver
     # ------------------------------------------------------------------
-    if args.cylinder and args.re_is_cylinder_based and r is not None:
-        d_cyl = 2.0 * r
-        nu = bc.u_inf * d_cyl / args.re
-    else:
-        nu = 1.0 / args.re
+    nu = _kinematic_viscosity(args, bc.u_inf, r)
 
     if is_root and args.verbose and args.cylinder and args.re_is_cylinder_based and r is not None:
         d_cyl = 2.0 * r
@@ -499,12 +526,8 @@ def run(args, grid=None, grid_loaded_from_file=False):
             if is_root:
                 snap_path = os.path.join(
                     args.outdir, f"snap_{solver.t:08.4f}.npz")
-                meta = dict(t=solver.t, nx=args.nx, ny=args.ny,
-                            lx=args.lx, ly=args.ly, re=args.re,
-                            ibm_force_x=solver.last_ibm_force_x,
-                            ibm_force_y=solver.last_ibm_force_y)
                 save_snapshot(snap_path, solver.u, solver.v, solver.p,
-                              solver.t, meta=meta, fmt="numpy")
+                              solver.t, meta=_snapshot_metadata(args, solver), fmt="numpy")
             t_save_next += args.save_dt
 
     if is_root and args.verbose:
@@ -606,10 +629,7 @@ def _plot_results(solver, grid, args):
     fig.suptitle(f"Re={args.re:.0f},  t={solver.t:.3f}")
     fig.tight_layout()
 
-    results_dir = os.path.join(os.path.dirname(
-        os.path.abspath(__file__)), "results")
-    os.makedirs(results_dir, exist_ok=True)
-    plot_path = os.path.join(results_dir, "result.png")
+    plot_path = os.path.join(_ensure_results_dir(), "result.png")
     fig.savefig(plot_path, dpi=150)
     print(f"  Plot saved to {plot_path}")
     plt.close(fig)
@@ -709,18 +729,14 @@ def _plot_grid(grid, args):
     )
     fig.tight_layout()
 
-    results_dir = os.path.join(os.path.dirname(
-        os.path.abspath(__file__)), "results")
-    os.makedirs(results_dir, exist_ok=True)
-    plot_path = os.path.join(results_dir, "grid.png")
+    plot_path = os.path.join(_ensure_results_dir(), "grid.png")
     fig.savefig(plot_path, dpi=180)
     print(f"  Grid plot saved to {plot_path}")
     plt.close(fig)
 
 
 def _run_auto_outputs(grid, args):
-    results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
-    os.makedirs(results_dir, exist_ok=True)
+    results_dir = _ensure_results_dir()
 
     if args.auto_generate_grid_spacing:
         _plot_grid(grid, args)

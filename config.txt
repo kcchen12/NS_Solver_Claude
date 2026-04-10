@@ -59,8 +59,8 @@ runtime_nonuniform_mode = center-band
 
 # Features (true/false)
 cylinder = true
-cylinder_center_x = 4.0
-cylinder_center_y = 2.5
+cylinder_center_x = 8.0
+cylinder_center_y = 5.0
 # Cylinder radius in physical units (set > 0 to override default ly/8)
 cylinder_radius = 0.5
 # If true, re is interpreted as Re_D based on cylinder diameter

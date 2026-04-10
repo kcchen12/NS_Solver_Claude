@@ -82,6 +82,8 @@ class CartesianGrid:
         self.dx_cells = np.diff(self.xf)
         self.dy_cells = np.diff(self.yf)
         self.dz_cells = np.diff(self.zf)
+        self.dxc = np.diff(self.xc)
+        self.dyc = np.diff(self.yc)
 
         self.dx_min = float(np.min(self.dx_cells))
         self.dy_min = float(np.min(self.dy_cells))
@@ -94,6 +96,17 @@ class CartesianGrid:
         self.dx = self.dx_min
         self.dy = self.dy_min
         self.dz = self.dz_min if nz > 1 else lz
+        self.mean_cell_area = float(np.mean(self.dx_cells) * np.mean(self.dy_cells))
+
+        self.xc_with_ghost = np.empty(self.nx + 2, dtype=float)
+        self.xc_with_ghost[1:-1] = self.xc
+        self.xc_with_ghost[0] = -self.xc[0]
+        self.xc_with_ghost[-1] = 2.0 * self.lx - self.xc[-1]
+
+        self.yc_with_ghost = np.empty(self.ny + 2, dtype=float)
+        self.yc_with_ghost[1:-1] = self.yc
+        self.yc_with_ghost[0] = -self.yc[0]
+        self.yc_with_ghost[-1] = 2.0 * self.ly - self.yc[-1]
 
         self.is_uniform = bool(
             np.allclose(self.dx_cells, self.dx_cells[0]) and
@@ -316,20 +329,53 @@ def stretched_faces_center_band(
     band_start = max(0.0, center_clamped - half_width)
     band_end = min(length, center_clamped + half_width)
 
-    dense_points = max(2001, 50 * n + 1)
-    x_dense = np.linspace(0.0, length, dense_points)
-    density = np.ones_like(x_dense)
+    segment_lengths = np.array(
+        [
+            band_start,
+            center_clamped - band_start,
+            band_end - center_clamped,
+            length - band_end,
+        ],
+        dtype=float,
+    )
+    center_weight = 1.0 + 0.25 * beta
+    segment_weights = np.array(
+        [1.0, center_weight, center_weight, 1.0], dtype=float
+    )
+    segment_counts = _allocate_piecewise_cells(n, segment_lengths, segment_weights)
 
-    inside = (x_dense >= band_start) & (x_dense <= band_end)
-    if np.any(inside):
-        local = (x_dense[inside] - center_clamped) / max(half_width, eps)
-        # Raised-cosine bump: density=1 at band edges and density=1+beta at center.
-        density[inside] += beta * 0.5 * (1.0 + np.cos(np.pi * local))
+    segments = []
 
-    cumulative = np.zeros_like(x_dense)
-    cumulative[1:] = np.cumsum(0.5 * (density[:-1] + density[1:]) * np.diff(x_dense))
-    targets = np.linspace(0.0, cumulative[-1], n + 1)
-    faces = np.interp(targets, cumulative, x_dense)
+    left_outer_n = int(segment_counts[0])
+    if left_outer_n > 0:
+        segments.append(np.linspace(0.0, band_start, left_outer_n + 1))
+
+    left_inner_n = int(segment_counts[1])
+    if left_inner_n > 0:
+        segments.append(
+            band_start
+            + _cluster_to_upper_end(
+                left_inner_n, center_clamped - band_start, beta
+            )
+        )
+
+    right_inner_n = int(segment_counts[2])
+    if right_inner_n > 0:
+        segments.append(
+            center_clamped
+            + _cluster_to_lower_end(
+                right_inner_n, band_end - center_clamped, beta
+            )
+        )
+
+    right_outer_n = int(segment_counts[3])
+    if right_outer_n > 0:
+        segments.append(np.linspace(band_end, length, right_outer_n + 1))
+
+    if segments:
+        faces = np.concatenate([segments[0]] + [segment[1:] for segment in segments[1:]])
+    else:
+        faces = np.linspace(0.0, length, n + 1)
     faces[0] = 0.0
     faces[-1] = length
     return faces, band_start, band_end

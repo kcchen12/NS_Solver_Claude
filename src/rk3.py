@@ -1,27 +1,13 @@
 """
 3rd-order Strong-Stability-Preserving Runge-Kutta integrator (SSP-RK3).
 
-The Shu-Osher (1988) three-stage scheme reads:
-
-    u¹  =  uⁿ + Δt · L(uⁿ)
-    u²  =  ¾ uⁿ  + ¼ (u¹ + Δt · L(u¹))
-    uⁿ⁺¹ = ⅓ uⁿ  + ⅔ (u² + Δt · L(u²))
-
-where L denotes the spatial operator (convection + diffusion).
-
-This is equivalent to the classic RK3 but expressed in Shu-Osher form
-that preserves the TVD / SSP property, making it well-suited for
-hyperbolic-dominated problems.
-
-Usage with the fractional-step solver
---------------------------------------
-The integrator is given a callable ``rhs_fn(u, v) → (Lu, Lv)`` that
-evaluates the convection-diffusion right-hand side **excluding pressure**.
-Pressure correction is applied once, after all RK stages, by the
-:class:`~src.solver.FractionalStepSolver`.
+The integrator advances the interior velocity degrees of freedom while
+leaving boundary faces untouched. Boundary conditions are enforced by the
+caller between stages.
 """
 
 from typing import Callable, Tuple
+
 import numpy as np
 
 
@@ -35,47 +21,41 @@ def ssp_rk3_step(
     dt: float,
 ) -> ArrayPair:
     """
-    Advance (u, v) by one time step Δt using SSP-RK3.
+    Advance (u, v) by one time step using the Shu-Osher SSP-RK3 scheme.
 
-    Parameters
-    ----------
-    rhs_fn : callable
-        ``rhs_fn(u, v)`` → ``(Lu, Lv)`` where Lu and Lv are the
-        convection-diffusion right-hand sides for the interior faces.
-        The returned arrays must match the *interior* shapes:
-            Lu : shape (nx-1, ny)
-            Lv : shape (nx, ny-1)
-    u, v : np.ndarray
-        Current velocity fields (full arrays including boundary faces).
-    dt : float
-        Time-step size.
-
-    Returns
-    -------
-    u_new, v_new : np.ndarray
-        Updated interior values.  Boundary values are *not* modified
-        here; the caller (:class:`~src.solver.FractionalStepSolver`)
-        applies BCs after each stage.
+    The RHS function must return arrays with the interior shapes:
+        Lu : shape (nx-1, ny)
+        Lv : shape (nx, ny-1)
     """
-    # Stage 1
+    u_int = np.s_[1:-1, :]
+    v_int = np.s_[:, 1:-1]
+    u_shape = u[u_int].shape
+    v_shape = v[v_int].shape
+
+    def _validate_shapes(Lu: np.ndarray, Lv: np.ndarray, stage: str) -> None:
+        if Lu.shape != u_shape:
+            raise ValueError(f"{stage}: Lu must have shape {u_shape}, got {Lu.shape}")
+        if Lv.shape != v_shape:
+            raise ValueError(f"{stage}: Lv must have shape {v_shape}, got {Lv.shape}")
+
     Lu1, Lv1 = rhs_fn(u, v)
+    _validate_shapes(Lu1, Lv1, "stage 1")
     u1 = u.copy()
     v1 = v.copy()
-    u1[1:-1, :] = u[1:-1, :] + dt * Lu1
-    v1[:, 1:-1] = v[:, 1:-1] + dt * Lv1
+    u1[u_int] = u[u_int] + dt * Lu1
+    v1[v_int] = v[v_int] + dt * Lv1
 
-    # Stage 2
     Lu2, Lv2 = rhs_fn(u1, v1)
+    _validate_shapes(Lu2, Lv2, "stage 2")
     u2 = u.copy()
     v2 = v.copy()
-    u2[1:-1, :] = 0.75 * u[1:-1, :] + 0.25 * (u1[1:-1, :] + dt * Lu2)
-    v2[:, 1:-1] = 0.75 * v[:, 1:-1] + 0.25 * (v1[:, 1:-1] + dt * Lv2)
+    u2[u_int] = 0.75 * u[u_int] + 0.25 * (u1[u_int] + dt * Lu2)
+    v2[v_int] = 0.75 * v[v_int] + 0.25 * (v1[v_int] + dt * Lv2)
 
-    # Stage 3  →  result
     Lu3, Lv3 = rhs_fn(u2, v2)
+    _validate_shapes(Lu3, Lv3, "stage 3")
     u_new = u.copy()
     v_new = v.copy()
-    u_new[1:-1, :] = (1.0 / 3.0) * u[1:-1, :] + (2.0 / 3.0) * (u2[1:-1, :] + dt * Lu3)
-    v_new[:, 1:-1] = (1.0 / 3.0) * v[:, 1:-1] + (2.0 / 3.0) * (v2[:, 1:-1] + dt * Lv3)
-
+    u_new[u_int] = (1.0 / 3.0) * u[u_int] + (2.0 / 3.0) * (u2[u_int] + dt * Lu3)
+    v_new[v_int] = (1.0 / 3.0) * v[v_int] + (2.0 / 3.0) * (v2[v_int] + dt * Lv3)
     return u_new, v_new

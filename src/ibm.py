@@ -74,20 +74,17 @@ class ImmersedBoundary:
         u_body, v_body : float
             Prescribed velocity on the body surface (0 for stationary wall).
         """
+        del u_body, v_body
         grid = self.grid
-        # x-faces  (xf[i], yc[j])
-        for i in range(grid.nx + 1):
-            for j in range(grid.ny):
-                r2 = (grid.xf[i] - cx)**2 + (grid.yc[j] - cy)**2
-                if r2 <= radius**2:
-                    self.mask_u[i, j] = True
+        radius_sq = radius**2
 
-        # y-faces  (xc[i], yf[j])
-        for i in range(grid.nx):
-            for j in range(grid.ny + 1):
-                r2 = (grid.xc[i] - cx)**2 + (grid.yf[j] - cy)**2
-                if r2 <= radius**2:
-                    self.mask_v[i, j] = True
+        xf = grid.xf[:, np.newaxis]
+        yc = grid.yc[np.newaxis, :]
+        self.mask_u |= ((xf - cx) ** 2 + (yc - cy) ** 2) <= radius_sq
+
+        xc = grid.xc[:, np.newaxis]
+        yf = grid.yf[np.newaxis, :]
+        self.mask_v |= ((xc - cx) ** 2 + (yf - cy) ** 2) <= radius_sq
 
     def add_rectangle(self, x0: float, x1: float,
                       y0: float, y1: float,
@@ -95,15 +92,20 @@ class ImmersedBoundary:
         """
         Mark all MAC faces inside axis-aligned rectangle [x0,x1]×[y0,y1].
         """
+        del u_body, v_body
         grid = self.grid
-        for i in range(grid.nx + 1):
-            for j in range(grid.ny):
-                if x0 <= grid.xf[i] <= x1 and y0 <= grid.yc[j] <= y1:
-                    self.mask_u[i, j] = True
-        for i in range(grid.nx):
-            for j in range(grid.ny + 1):
-                if x0 <= grid.xc[i] <= x1 and y0 <= grid.yf[j] <= y1:
-                    self.mask_v[i, j] = True
+        self.mask_u |= (
+            (grid.xf[:, np.newaxis] >= x0)
+            & (grid.xf[:, np.newaxis] <= x1)
+            & (grid.yc[np.newaxis, :] >= y0)
+            & (grid.yc[np.newaxis, :] <= y1)
+        )
+        self.mask_v |= (
+            (grid.xc[:, np.newaxis] >= x0)
+            & (grid.xc[:, np.newaxis] <= x1)
+            & (grid.yf[np.newaxis, :] >= y0)
+            & (grid.yf[np.newaxis, :] <= y1)
+        )
 
     def add_mask(self, mask_u: np.ndarray, mask_v: np.ndarray) -> None:
         """
@@ -131,8 +133,7 @@ class ImmersedBoundary:
         force_x = 0.0
         force_y = 0.0
         if dt is not None and dt > 0.0:
-            face_area = float(np.mean(self.grid.dx_cells) *
-                              np.mean(self.grid.dy_cells))
+            face_area = self.grid.mean_cell_area
             force_x = rho * face_area * \
                 float(np.sum(u[self.mask_u] - u_body)) / dt
             force_y = rho * face_area * \

@@ -110,16 +110,6 @@ def _outflow_convective_speed(bc: BoundaryConfig, normal_reference: float) -> fl
     return max(abs(float(normal_reference)), 1e-10)
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _apply_face_u(u: np.ndarray, j_slice, value: float):
-    """Set u ghost cells in y-direction so wall average equals *value*."""
-    # u[:, j_slice] is the first/last interior row; ghost = 2*value - interior
-    pass  # handled inline below
-
-
 def _ghost_no_slip(interior_row: np.ndarray, wall_value: float) -> np.ndarray:
     """Return ghost-cell values that enforce wall_value at the boundary face."""
     return 2.0 * wall_value - interior_row

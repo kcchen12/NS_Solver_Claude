@@ -12,7 +12,11 @@ Usage:
 """
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
+
+
+_BOOL_TRUE = {"true", "1", "yes", "on"}
+_BOOL_FALSE = {"false", "0", "no", "off"}
 
 
 class ConfigParser:
@@ -41,9 +45,9 @@ class ConfigParser:
         try:
             with open(self.filepath, 'r') as f:
                 for line in f:
-                    line = line.strip()
+                    line = line.split("#", 1)[0].strip()
                     # Skip empty lines and comments
-                    if not line or line.startswith('#'):
+                    if not line:
                         continue
                     # Parse key = value
                     if '=' in line:
@@ -75,13 +79,14 @@ class ConfigParser:
         if key not in self.config:
             return default
 
-        value_str = self.config[key].lower()
+        raw_value = self.config[key]
+        value_str = raw_value.strip().lower()
 
         # Handle boolean conversion
         if dtype == bool:
-            if value_str in ('true', '1', 'yes', 'on'):
+            if value_str in _BOOL_TRUE:
                 return True
-            elif value_str in ('false', '0', 'no', 'off'):
+            elif value_str in _BOOL_FALSE:
                 return False
             else:
                 return default
@@ -89,13 +94,13 @@ class ConfigParser:
         # Handle numeric and string types
         try:
             if dtype == int:
-                return int(self.config[key])
+                return int(raw_value)
             elif dtype == float:
-                return float(self.config[key])
+                return float(raw_value)
             else:
-                return self.config[key]
+                return raw_value
         except (ValueError, TypeError):
-            print(f"Warning: Could not convert '{key}={self.config[key]}' "
+            print(f"Warning: Could not convert '{key}={raw_value}' "
                   f"to {dtype.__name__}. Using default value {default}.")
             return default
 

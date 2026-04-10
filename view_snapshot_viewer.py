@@ -32,11 +32,23 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
+DEFAULT_RESULTS_DIR = "results"
+
+
 def ensure_results_dir(results_dir: str = "results") -> str:
     """Ensure the results directory exists."""
     if not os.path.exists(results_dir):
         os.makedirs(results_dir)
     return results_dir
+
+
+def _result_path(filename: str, results_dir: str = DEFAULT_RESULTS_DIR) -> str:
+    return os.path.join(ensure_results_dir(results_dir), filename)
+
+
+def _load_npz_keys(path: str) -> list[str]:
+    with np.load(path, allow_pickle=False) as data:
+        return list(data.keys())
 
 
 def find_latest_snapshot(dirpath: str = "output", pattern: str = "snap_*.npz") -> Optional[str]:
@@ -252,9 +264,8 @@ def plot_coeff_history(
     fig2.tight_layout()
 
     if save_name:
-        results_dir = ensure_results_dir()
         osc_name = _derive_oscillation_save_name(save_name)
-        osc_path = os.path.join(results_dir, osc_name)
+        osc_path = _result_path(osc_name)
         fig2.savefig(osc_path, dpi=150, bbox_inches="tight")
         print(f"Saved figure: {osc_path}")
     else:
@@ -262,7 +273,7 @@ def plot_coeff_history(
 
 
 def inspect_npz(path: str):
-    with np.load(path, allow_pickle=True) as data:
+    with np.load(path, allow_pickle=False) as data:
         keys = list(data.keys())
         print(f"File: {path}")
         if not keys:
@@ -313,7 +324,7 @@ def plot_snapshot_key(
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
 
-    with np.load(file_path, allow_pickle=True) as data:
+    with np.load(file_path, allow_pickle=False) as data:
         keys = list(data.keys())
         if key not in keys:
             raise KeyError(f"Key '{key}' not found. Available: {keys}")
@@ -330,8 +341,7 @@ def plot_snapshot_key(
     ax.set_ylabel('y', fontsize=10)
 
     if save_name:
-        results_dir = ensure_results_dir()
-        save_path = os.path.join(results_dir, save_name)
+        save_path = _result_path(save_name)
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"Saved figure: {save_path}")
     else:
@@ -393,15 +403,14 @@ def main(argv=None):
         print(f"File not found: {args.file}", file=sys.stderr)
         sys.exit(2)
 
-    with np.load(args.file, allow_pickle=True) as data:
-        keys = list(data.keys())
-        if args.list:
-            inspect_npz(args.file)
-            return
-        if not keys:
-            print("No arrays found in file", file=sys.stderr)
-            sys.exit(3)
-        key = args.key or keys[0]
+    keys = _load_npz_keys(args.file)
+    if args.list:
+        inspect_npz(args.file)
+        return
+    if not keys:
+        print("No arrays found in file", file=sys.stderr)
+        sys.exit(3)
+    key = args.key or keys[0]
 
     try:
         plot_snapshot_key(

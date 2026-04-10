@@ -284,6 +284,6 @@ Useful viewer options:
 
 ## Notes
 
-- The README now reflects the current split-config workflow
+- The repo uses the split-config workflow: runtime settings in [config.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/config.txt) and derived-output controls in [post_config.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/post_config.txt)
 - There is no `evaluate_strouhal.py` in this repo; use [analyze_aerodynamics.py](/Users/Carolyn/Desktop/NS_Solver_Claude/analyze_aerodynamics.py) for current frequency/report analysis
-- The local Python environment on this machine currently appears broken, so documentation changes were updated against the code but not executed end-to-end from this shell
+- The current code and examples match the tested solver and post-processing paths in this repository

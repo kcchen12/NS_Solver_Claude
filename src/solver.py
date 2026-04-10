@@ -155,12 +155,12 @@ class FractionalStepSolver:
         # ----------------------------------------------------------------
         # Interior x-faces: i = 1 .. nx-1
         u_new = u_star.copy()
-        dxc = np.diff(grid.xc)[:, np.newaxis]
+        dxc = grid.dxc[:, np.newaxis]
         u_new[1:-1, :] -= dt * (phi[1:, :] - phi[:-1, :]) / dxc
 
         # Interior y-faces: j = 1 .. ny-1
         v_new = v_star.copy()
-        dyc = np.diff(grid.yc)[np.newaxis, :]
+        dyc = grid.dyc[np.newaxis, :]
         v_new[:, 1:-1] -= dt * (phi[:, 1:] - phi[:, :-1]) / dyc
 
         # ----------------------------------------------------------------
