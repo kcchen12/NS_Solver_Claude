@@ -56,6 +56,7 @@ from src.parallel import ParallelDecomposition
 from src.config import ConfigParser
 from analyze_aerodynamics import run_analysis as run_aero_analysis
 from view_snapshot_viewer import find_latest_snapshot, plot_coeff_history, plot_snapshot_key
+from view_snapshot_viewer import plot_ibm_forcing
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -147,6 +148,14 @@ def parse_args():
     p.add_argument("--ny",       type=int,   default=cfg.get("ny", 32, int))
     p.add_argument("--lx",       type=float, default=cfg.get("lx", 4.0, float))
     p.add_argument("--ly",       type=float, default=cfg.get("ly", 2.0, float))
+    p.add_argument("--x-min",    type=float, default=cfg.get("x_min", None, float),
+                   help="Domain lower bound in x (optional; defaults to 0)")
+    p.add_argument("--x-max",    type=float, default=cfg.get("x_max", None, float),
+                   help="Domain upper bound in x (optional; inferred from x_min+lx)")
+    p.add_argument("--y-min",    type=float, default=cfg.get("y_min", None, float),
+                   help="Domain lower bound in y (optional; defaults to 0)")
+    p.add_argument("--y-max",    type=float, default=cfg.get("y_max", None, float),
+                   help="Domain upper bound in y (optional; inferred from y_min+ly)")
     p.add_argument("--re",       type=float, default=cfg.get("re", 100.0, float),
                    help="Reynolds number (Re = U_inf * L / nu)")
     p.add_argument("--t_end",    type=float,
@@ -193,20 +202,29 @@ def parse_args():
                    default=post_cfg.get("plot_grid", False, bool),
                    help="Save a physical grid plot showing mesh concentration")
     p.add_argument("--auto-generate-grid-spacing", type=str_to_bool,
-                   default=post_cfg.get("auto_generate_grid_spacing", False, bool),
+                   default=post_cfg.get(
+                       "auto_generate_grid_spacing", False, bool),
                    help="Automatically save the grid spacing/concentration figure after the run")
     p.add_argument("--auto-generate-coeff-history", type=str_to_bool,
-                   default=post_cfg.get("auto_generate_coeff_history", False, bool),
+                   default=post_cfg.get(
+                       "auto_generate_coeff_history", False, bool),
                    help="Automatically save the drag/lift coefficient history figure after the run")
     p.add_argument("--auto-generate-aero-report", type=str_to_bool,
-                   default=post_cfg.get("auto_generate_aero_report", False, bool),
+                   default=post_cfg.get(
+                       "auto_generate_aero_report", False, bool),
                    help="Automatically save the aerodynamic report after the run")
     p.add_argument("--auto-generate-velocity-u", type=str_to_bool,
-                   default=post_cfg.get("auto_generate_velocity_u", False, bool),
+                   default=post_cfg.get(
+                       "auto_generate_velocity_u", False, bool),
                    help="Automatically save a plot of the latest u-velocity snapshot")
     p.add_argument("--auto-generate-velocity-v", type=str_to_bool,
-                   default=post_cfg.get("auto_generate_velocity_v", False, bool),
+                   default=post_cfg.get(
+                       "auto_generate_velocity_v", False, bool),
                    help="Automatically save a plot of the latest v-velocity snapshot")
+    p.add_argument("--auto-generate-ibm-forcing", type=str_to_bool,
+                   default=post_cfg.get(
+                       "auto_generate_ibm_forcing", False, bool),
+                   help="Automatically save a plot of IBM forcing components/magnitude")
     p.add_argument("--verbose",  type=str_to_bool, default=cfg.get("verbose", True, bool),
                    help="Print periodic diagnostics during the time loop")
 
@@ -256,7 +274,28 @@ def parse_args():
     p.add_argument("--auto-aero-t-min", type=float,
                    default=post_cfg.get("auto_aero_t_min", 1.0, float),
                    help="Minimum time used when auto-generating aerodynamic analysis")
-    return p.parse_args()
+    args = p.parse_args()
+
+    args.x_min = 0.0 if args.x_min is None else float(args.x_min)
+    args.y_min = 0.0 if args.y_min is None else float(args.y_min)
+
+    if args.x_max is None:
+        args.x_max = args.x_min + float(args.lx)
+    else:
+        args.x_max = float(args.x_max)
+    if args.y_max is None:
+        args.y_max = args.y_min + float(args.ly)
+    else:
+        args.y_max = float(args.y_max)
+
+    if not args.x_max > args.x_min:
+        p.error("Require x_max > x_min")
+    if not args.y_max > args.y_min:
+        p.error("Require y_max > y_min")
+
+    args.lx = float(args.x_max - args.x_min)
+    args.ly = float(args.y_max - args.y_min)
+    return args
 
 
 def _grid_metadata_path(args) -> str:
@@ -265,8 +304,8 @@ def _grid_metadata_path(args) -> str:
 
 
 def _expected_nonuniform_focus(args) -> tuple[float, float]:
-    focus_x = args.cylinder_center_x if args.cylinder_center_x >= 0.0 else args.lx / 2.0
-    focus_y = args.cylinder_center_y if args.cylinder_center_y >= 0.0 else args.ly / 2.0
+    focus_x = args.cylinder_center_x if args.cylinder_center_x >= 0.0 else args.x_min + 0.5 * args.lx
+    focus_y = args.cylinder_center_y if args.cylinder_center_y >= 0.0 else args.y_min + 0.5 * args.ly
     return focus_x, focus_y
 
 
@@ -274,9 +313,11 @@ def _expected_nonuniform_band(args) -> tuple[float, float, float, float]:
     center_x, center_y = _expected_nonuniform_focus(args)
     width_x = float(np.clip(args.band_fraction_x, 1e-3, 1.0)) * args.lx
     width_y = float(np.clip(args.band_fraction_y, 1e-3, 1.0)) * args.ly
-    start_x = float(np.clip(center_x - 0.5 * width_x, 0.0, args.lx - width_x))
+    start_x = float(np.clip(center_x - 0.5 * width_x,
+                    args.x_min, args.x_max - width_x))
     end_x = start_x + width_x
-    start_y = float(np.clip(center_y - 0.5 * width_y, 0.0, args.ly - width_y))
+    start_y = float(np.clip(center_y - 0.5 * width_y,
+                    args.y_min, args.y_max - width_y))
     end_y = start_y + width_y
     return start_x, end_x, start_y, end_y
 
@@ -287,8 +328,8 @@ def _ensure_results_dir() -> str:
 
 
 def _resolve_cylinder_geometry(args) -> tuple[float, float, float]:
-    cx = args.cylinder_center_x if args.cylinder_center_x >= 0.0 else args.lx / 4.0
-    cy = args.cylinder_center_y if args.cylinder_center_y >= 0.0 else args.ly / 2.0
+    cx = args.cylinder_center_x if args.cylinder_center_x >= 0.0 else args.x_min + 0.25 * args.lx
+    cy = args.cylinder_center_y if args.cylinder_center_y >= 0.0 else args.y_min + 0.5 * args.ly
     radius = args.cylinder_radius if args.cylinder_radius > 0.0 else args.ly / 8.0
     return cx, cy, radius
 
@@ -312,14 +353,33 @@ def _snapshot_metadata(args, solver) -> dict:
     }
 
 
+def _snapshot_extra_fields(solver) -> dict:
+    return {
+        "ibm_forcing_u_face": solver.last_ibm_forcing_u,
+        "ibm_forcing_v_face": solver.last_ibm_forcing_v,
+        "ibm_forcing_x_cell": solver.last_ibm_forcing_xc,
+        "ibm_forcing_y_cell": solver.last_ibm_forcing_yc,
+    }
+
+
 def _grid_matches_args(metadata: dict, grid, args) -> bool:
     metadata_type = str(metadata.get("grid_type", "uniform")).strip().lower()
+    meta_lx = float(metadata.get("lx", grid.lx))
+    meta_ly = float(metadata.get("ly", grid.ly))
+    meta_x_min = float(metadata.get("x_min", 0.0))
+    meta_y_min = float(metadata.get("y_min", 0.0))
+    meta_x_max = float(metadata.get("x_max", meta_x_min + meta_lx))
+    meta_y_max = float(metadata.get("y_max", meta_y_min + meta_ly))
 
     return (
         grid.nx == args.nx and
         grid.ny == args.ny and
         np.isclose(grid.lx, args.lx) and
         np.isclose(grid.ly, args.ly) and
+        np.isclose(meta_x_min, args.x_min) and
+        np.isclose(meta_x_max, args.x_max) and
+        np.isclose(meta_y_min, args.y_min) and
+        np.isclose(meta_y_max, args.y_max) and
         ((args.grid_type == "uniform" and grid.is_uniform and metadata_type == "uniform") or (
             args.grid_type == "nonuniform" and not grid.is_uniform and metadata_type == "nonuniform"))
     )
@@ -332,7 +392,8 @@ def _nonuniform_metadata_matches_args(metadata: dict, args) -> bool:
         return False
 
     focus_x, focus_y = _expected_nonuniform_focus(args)
-    band_start_x, band_end_x, band_start_y, band_end_y = _expected_nonuniform_band(args)
+    band_start_x, band_end_x, band_start_y, band_end_y = _expected_nonuniform_band(
+        args)
     return (
         np.isclose(float(metadata.get("beta_x", np.nan)), float(args.beta_x)) and
         np.isclose(float(metadata.get("beta_y", np.nan)), float(args.beta_y)) and
@@ -343,7 +404,8 @@ def _nonuniform_metadata_matches_args(metadata: dict, args) -> bool:
         np.isclose(float(metadata.get("band_start_x", np.nan)), float(band_start_x)) and
         np.isclose(float(metadata.get("band_end_x", np.nan)), float(band_end_x)) and
         np.isclose(float(metadata.get("band_start_y", np.nan)), float(band_start_y)) and
-        np.isclose(float(metadata.get("band_end_y", np.nan)), float(band_end_y))
+        np.isclose(float(metadata.get("band_end_y", np.nan)),
+                   float(band_end_y))
     )
 
 
@@ -353,7 +415,8 @@ def _nonuniform_metadata_matches_args(metadata: dict, args) -> bool:
 
 def prepare_uniform_grid(args):
     """Build the runtime grid and write its metadata before the solver starts."""
-    grid = CartesianGrid(nx=args.nx, ny=args.ny, lx=args.lx, ly=args.ly)
+    grid = CartesianGrid(nx=args.nx, ny=args.ny, lx=args.lx, ly=args.ly,
+                         x_min=args.x_min, y_min=args.y_min)
     os.makedirs(args.outdir, exist_ok=True)
     save_grid_metadata(_grid_metadata_path(args), grid)
     return grid
@@ -369,6 +432,8 @@ def prepare_nonuniform_grid(args):
         ly=args.ly,
         beta_x=args.beta_x,
         beta_y=args.beta_y,
+        x_min=args.x_min,
+        y_min=args.y_min,
         focus_x=focus_x,
         focus_y=focus_y,
         band_fraction_x=args.band_fraction_x,
@@ -418,7 +483,11 @@ def run(args, grid=None, grid_loaded_from_file=False):
         print(f"  Config file   : {args.config}")
         print(f"  Grid          : {args.nx} x {args.ny}")
         print(f"  Grid type     : {args.grid_type}")
-        print(f"  Domain        : {args.lx} x {args.ly}")
+        print(
+            "  Domain        : "
+            f"x=[{args.x_min}, {args.x_max}] (Lx={args.lx}), "
+            f"y=[{args.y_min}, {args.y_max}] (Ly={args.ly})"
+        )
         print(f"  Reynolds no.  : {args.re}")
         print(f"  End time      : {args.t_end}")
         print(f"  MPI ranks     : {decomp.size}")
@@ -527,7 +596,10 @@ def run(args, grid=None, grid_loaded_from_file=False):
                 snap_path = os.path.join(
                     args.outdir, f"snap_{solver.t:08.4f}.npz")
                 save_snapshot(snap_path, solver.u, solver.v, solver.p,
-                              solver.t, meta=_snapshot_metadata(args, solver), fmt="numpy")
+                              solver.t,
+                              meta=_snapshot_metadata(args, solver),
+                              extra=_snapshot_extra_fields(solver),
+                              fmt="numpy")
             t_save_next += args.save_dt
 
     if is_root and args.verbose:
@@ -577,12 +649,13 @@ def _plot_results(solver, grid, args):
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 
-    # Vorticity
-    wmax = float(np.max(np.abs(omega)))
+    # Vorticity: use robust clipping + high-contrast diverging map
+    # so coherent structures are easier to read.
+    wmax = float(np.percentile(np.abs(omega), 99.0))
     wmax = max(wmax, 1e-8)
-    levels = np.linspace(-wmax, wmax, 61)
+    levels = np.linspace(-wmax, wmax, 81)
     im0 = axes[0].contourf(X, Y, omega, levels=levels,
-                           cmap="RdBu_r", extend="both")
+                           cmap="seismic", extend="both")
     fig.colorbar(im0, ax=axes[0])
     axes[0].set_title(r"Vorticity $\omega_z$")
     axes[0].set_xlabel("x")
@@ -658,35 +731,41 @@ def _plot_grid(grid, args):
 
     mesh_ax = axes[0]
     vertical_segments = [
-        [(float(x), 0.0), (float(x), float(grid.ly))]
+        [(float(x), float(grid.y_min)), (float(x), float(grid.y_max))]
         for x in x_edges
     ]
     horizontal_segments = [
-        [(0.0, float(y)), (float(grid.lx), float(y))]
+        [(float(grid.x_min), float(y)), (float(grid.x_max), float(y))]
         for y in y_edges
     ]
-    mesh_ax.add_collection(LineCollection(vertical_segments, colors="0.15", linewidths=0.6))
-    mesh_ax.add_collection(LineCollection(horizontal_segments, colors="0.15", linewidths=0.6))
-    mesh_ax.set_xlim(0.0, grid.lx)
-    mesh_ax.set_ylim(0.0, grid.ly)
+    mesh_ax.add_collection(LineCollection(
+        vertical_segments, colors="0.15", linewidths=0.6))
+    mesh_ax.add_collection(LineCollection(
+        horizontal_segments, colors="0.15", linewidths=0.6))
+    mesh_ax.set_xlim(grid.x_min, grid.x_max)
+    mesh_ax.set_ylim(grid.y_min, grid.y_max)
     mesh_ax.set_aspect("equal")
     mesh_ax.set_title("Physical Grid")
     mesh_ax.set_xlabel("x")
     mesh_ax.set_ylabel("y")
 
     density_ax = axes[1]
-    density_im = density_ax.pcolormesh(Xf, Yf, density, shading="flat", cmap="viridis")
-    fig.colorbar(density_im, ax=density_ax, label=r"Cell density $1/(\Delta x \Delta y)$")
-    density_ax.set_xlim(0.0, grid.lx)
-    density_ax.set_ylim(0.0, grid.ly)
+    density_im = density_ax.pcolormesh(
+        Xf, Yf, density, shading="flat", cmap="viridis")
+    fig.colorbar(density_im, ax=density_ax,
+                 label=r"Cell density $1/(\Delta x \Delta y)$")
+    density_ax.set_xlim(grid.x_min, grid.x_max)
+    density_ax.set_ylim(grid.y_min, grid.y_max)
     density_ax.set_aspect("equal")
     density_ax.set_title("Point Concentration")
     density_ax.set_xlabel("x")
     density_ax.set_ylabel("y")
 
     spacing_ax = axes[2]
-    spacing_ax.plot(grid.xc, grid.dx_cells, label=r"$\Delta x$ at $x_c$", color="#d95f02", lw=2.0)
-    spacing_ax.plot(grid.yc, grid.dy_cells, label=r"$\Delta y$ at $y_c$", color="#1b9e77", lw=2.0)
+    spacing_ax.plot(grid.xc, grid.dx_cells,
+                    label=r"$\Delta x$ at $x_c$", color="#d95f02", lw=2.0)
+    spacing_ax.plot(grid.yc, grid.dy_cells,
+                    label=r"$\Delta y$ at $y_c$", color="#1b9e77", lw=2.0)
     spacing_ax.set_title("Cell Spacing")
     spacing_ax.set_xlabel("Physical coordinate")
     spacing_ax.set_ylabel("Cell width")
@@ -695,7 +774,8 @@ def _plot_grid(grid, args):
 
     if args.grid_type == "nonuniform":
         from matplotlib.patches import Rectangle
-        band_start_x, band_end_x, band_start_y, band_end_y = _expected_nonuniform_band(args)
+        band_start_x, band_end_x, band_start_y, band_end_y = _expected_nonuniform_band(
+            args)
         rect_width = band_end_x - band_start_x
         rect_height = band_end_y - band_start_y
         mesh_ax.add_patch(
@@ -720,6 +800,30 @@ def _plot_grid(grid, args):
                 ls="--",
                 lw=1.2,
                 alpha=0.9,
+            )
+        )
+
+    if args.cylinder:
+        from matplotlib.patches import Circle
+        cx, cy, radius = _resolve_cylinder_geometry(args)
+        mesh_ax.add_patch(
+            Circle(
+                (cx, cy),
+                radius,
+                fill=False,
+                ec="#001219",
+                lw=1.8,
+                zorder=5,
+            )
+        )
+        density_ax.add_patch(
+            Circle(
+                (cx, cy),
+                radius,
+                fill=False,
+                ec="white",
+                lw=1.6,
+                zorder=5,
             )
         )
 
@@ -751,7 +855,8 @@ def _run_auto_outputs(grid, args):
             pattern="snap_*.npz",
             config=args.config,
             u_ref=args.inflow_u,
-            use_cylinder_diameter=bool(args.re_is_cylinder_based and args.cylinder),
+            use_cylinder_diameter=bool(
+                args.re_is_cylinder_based and args.cylinder),
             t_min=args.auto_aero_t_min,
             save_series=aero_series_path,
             save_report=aero_report_path if args.auto_generate_aero_report else None,
@@ -769,13 +874,15 @@ def _run_auto_outputs(grid, args):
                 coeff_t_min=args.auto_coeff_t_min,
             )
         except Exception as exc:
-            print(f"  Warning: automatic coefficient-history plot failed: {exc}")
+            print(
+                f"  Warning: automatic coefficient-history plot failed: {exc}")
 
     latest_snapshot = None
-    if args.auto_generate_velocity_u or args.auto_generate_velocity_v:
+    if args.auto_generate_velocity_u or args.auto_generate_velocity_v or args.auto_generate_ibm_forcing:
         latest_snapshot = find_latest_snapshot(dirpath=args.outdir)
         if latest_snapshot is None:
-            print("  Warning: automatic velocity plots skipped because no snapshots were found.")
+            print(
+                "  Warning: automatic snapshot plots skipped because no snapshots were found.")
             return
 
     if args.auto_generate_velocity_u:
@@ -789,6 +896,12 @@ def _run_auto_outputs(grid, args):
             plot_snapshot_key(latest_snapshot, "v", save_name="velocity_v.png")
         except Exception as exc:
             print(f"  Warning: automatic v-velocity plot failed: {exc}")
+
+    if args.auto_generate_ibm_forcing:
+        try:
+            plot_ibm_forcing(latest_snapshot, save_name="ibm_forcing.png")
+        except Exception as exc:
+            print(f"  Warning: automatic IBM-forcing plot failed: {exc}")
 
 
 # ---------------------------------------------------------------------------

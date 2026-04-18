@@ -83,6 +83,15 @@ class TestCartesianGrid2D:
         assert np.allclose(loaded.xf, original.xf)
         assert np.allclose(loaded.yc, original.yc)
 
+    def test_custom_domain_bounds(self):
+        g = CartesianGrid(4, 2, lx=4.0, ly=2.0, x_min=-2.0, y_min=-1.0)
+        assert np.isclose(g.x_min, -2.0)
+        assert np.isclose(g.x_max, 2.0)
+        assert np.isclose(g.y_min, -1.0)
+        assert np.isclose(g.y_max, 1.0)
+        assert np.allclose(g.xf, [-2.0, -1.0, 0.0, 1.0, 2.0])
+        assert np.allclose(g.yf, [-1.0, 0.0, 1.0])
+
 
 class TestCartesianGrid3D:
     def test_3d_flag(self):
@@ -108,7 +117,8 @@ class TestPreparedNonuniformGrid:
         assert np.allclose(xf, [0.0, 0.25, 0.5, 0.75, 1.0])
 
     def test_center_band_returns_uniform_faces_when_beta_nonpositive(self):
-        xf, band_start, band_end = stretched_faces_center_band(6, 3.0, beta=0.0)
+        xf, band_start, band_end = stretched_faces_center_band(
+            6, 3.0, beta=0.0)
         assert np.allclose(xf, np.linspace(0.0, 3.0, 7))
         assert np.isclose(band_start, 0.0)
         assert np.isclose(band_end, 3.0)
@@ -132,6 +142,24 @@ class TestPreparedNonuniformGrid:
         assert np.isclose(meta["band_fraction_y"], 1.0 / 3.0)
         assert np.isclose(meta["xf"][0], 0.0)
         assert np.isclose(meta["xf"][-1], 2.0)
+
+    def test_nonuniform_metadata_respects_custom_bounds(self):
+        meta = build_nonuniform_grid_metadata(
+            nx=8,
+            ny=4,
+            lx=2.0,
+            ly=1.0,
+            beta_x=2.0,
+            beta_y=1.5,
+            x_min=-1.0,
+            y_min=-0.5,
+        )
+        assert np.isclose(meta["x_min"], -1.0)
+        assert np.isclose(meta["x_max"], 1.0)
+        assert np.isclose(meta["y_min"], -0.5)
+        assert np.isclose(meta["y_max"], 0.5)
+        assert np.isclose(meta["xf"][0], -1.0)
+        assert np.isclose(meta["xf"][-1], 1.0)
 
     def test_nonuniform_grid_concentrates_cells_in_center_band(self):
         meta = build_nonuniform_grid_metadata(

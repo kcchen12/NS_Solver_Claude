@@ -37,6 +37,9 @@ class CartesianGrid:
 
     def __init__(self, nx: int, ny: int, nz: int = 1,
                  lx: float = 1.0, ly: float = 1.0, lz: float = 1.0,
+                 x_min: float = 0.0,
+                 y_min: float = 0.0,
+                 z_min: float = 0.0,
                  xf: np.ndarray | None = None,
                  yf: np.ndarray | None = None,
                  zf: np.ndarray | None = None):
@@ -47,19 +50,20 @@ class CartesianGrid:
             Number of cells in each direction. ``nz=1`` activates 2-D mode.
         lx, ly, lz : float
             Physical domain lengths.
+        x_min, y_min, z_min : float
+            Lower bounds of the domain when faces are generated internally.
         """
         self.nx, self.ny, self.nz = nx, ny, nz
-        self.lx, self.ly, self.lz = lx, ly, lz
 
         self.is_3d: bool = nz > 1
 
         # Cell-face (node) coordinates
         self.xf = np.linspace(
-            0.0, lx, nx + 1) if xf is None else np.asarray(xf, dtype=float)
+            x_min, x_min + lx, nx + 1) if xf is None else np.asarray(xf, dtype=float)
         self.yf = np.linspace(
-            0.0, ly, ny + 1) if yf is None else np.asarray(yf, dtype=float)
+            y_min, y_min + ly, ny + 1) if yf is None else np.asarray(yf, dtype=float)
         self.zf = np.linspace(
-            0.0, lz, nz + 1) if zf is None else np.asarray(zf, dtype=float)
+            z_min, z_min + lz, nz + 1) if zf is None else np.asarray(zf, dtype=float)
 
         if self.xf.shape != (nx + 1,):
             raise ValueError(f"xf must have shape ({nx + 1},)")
@@ -73,6 +77,17 @@ class CartesianGrid:
             raise ValueError("yf must be strictly increasing")
         if not np.all(np.diff(self.zf) > 0.0):
             raise ValueError("zf must be strictly increasing")
+
+        self.x_min = float(self.xf[0])
+        self.x_max = float(self.xf[-1])
+        self.y_min = float(self.yf[0])
+        self.y_max = float(self.yf[-1])
+        self.z_min = float(self.zf[0])
+        self.z_max = float(self.zf[-1])
+
+        self.lx = self.x_max - self.x_min
+        self.ly = self.y_max - self.y_min
+        self.lz = self.z_max - self.z_min
 
         # Cell-centre coordinates
         self.xc = 0.5 * (self.xf[:-1] + self.xf[1:])
@@ -95,18 +110,19 @@ class CartesianGrid:
         # Backward-compatible scalar spacings used in legacy code paths.
         self.dx = self.dx_min
         self.dy = self.dy_min
-        self.dz = self.dz_min if nz > 1 else lz
-        self.mean_cell_area = float(np.mean(self.dx_cells) * np.mean(self.dy_cells))
+        self.dz = self.dz_min if nz > 1 else self.lz
+        self.mean_cell_area = float(
+            np.mean(self.dx_cells) * np.mean(self.dy_cells))
 
         self.xc_with_ghost = np.empty(self.nx + 2, dtype=float)
         self.xc_with_ghost[1:-1] = self.xc
-        self.xc_with_ghost[0] = -self.xc[0]
-        self.xc_with_ghost[-1] = 2.0 * self.lx - self.xc[-1]
+        self.xc_with_ghost[0] = 2.0 * self.x_min - self.xc[0]
+        self.xc_with_ghost[-1] = 2.0 * self.x_max - self.xc[-1]
 
         self.yc_with_ghost = np.empty(self.ny + 2, dtype=float)
         self.yc_with_ghost[1:-1] = self.yc
-        self.yc_with_ghost[0] = -self.yc[0]
-        self.yc_with_ghost[-1] = 2.0 * self.ly - self.yc[-1]
+        self.yc_with_ghost[0] = 2.0 * self.y_min - self.yc[0]
+        self.yc_with_ghost[-1] = 2.0 * self.y_max - self.yc[-1]
 
         self.is_uniform = bool(
             np.allclose(self.dx_cells, self.dx_cells[0]) and
@@ -168,6 +184,12 @@ class CartesianGrid:
             "lx": self.lx,
             "ly": self.ly,
             "lz": self.lz,
+            "x_min": self.x_min,
+            "x_max": self.x_max,
+            "y_min": self.y_min,
+            "y_max": self.y_max,
+            "z_min": self.z_min,
+            "z_max": self.z_max,
             "dx": self.dx,
             "dy": self.dy,
             "dz": self.dz,
@@ -203,6 +225,9 @@ class CartesianGrid:
             lx=float(metadata["lx"]),
             ly=float(metadata["ly"]),
             lz=float(metadata.get("lz", 1.0)),
+            x_min=float(metadata.get("x_min", 0.0)),
+            y_min=float(metadata.get("y_min", 0.0)),
+            z_min=float(metadata.get("z_min", 0.0)),
             xf=xf,
             yf=yf,
             zf=zf,
@@ -325,7 +350,8 @@ def stretched_faces_center_band(
     eps = 1e-12 * max(1.0, length)
 
     center_default = 0.5 * length if center is None else float(center)
-    center_clamped = float(np.clip(center_default, half_width + eps, length - half_width - eps))
+    center_clamped = float(
+        np.clip(center_default, half_width + eps, length - half_width - eps))
     band_start = max(0.0, center_clamped - half_width)
     band_end = min(length, center_clamped + half_width)
 
@@ -342,7 +368,8 @@ def stretched_faces_center_band(
     segment_weights = np.array(
         [1.0, center_weight, center_weight, 1.0], dtype=float
     )
-    segment_counts = _allocate_piecewise_cells(n, segment_lengths, segment_weights)
+    segment_counts = _allocate_piecewise_cells(
+        n, segment_lengths, segment_weights)
 
     segments = []
 
@@ -373,7 +400,8 @@ def stretched_faces_center_band(
         segments.append(np.linspace(band_end, length, right_outer_n + 1))
 
     if segments:
-        faces = np.concatenate([segments[0]] + [segment[1:] for segment in segments[1:]])
+        faces = np.concatenate([segments[0]] + [segment[1:]
+                               for segment in segments[1:]])
     else:
         faces = np.linspace(0.0, length, n + 1)
     faces[0] = 0.0
@@ -388,6 +416,8 @@ def build_nonuniform_grid_metadata(
     ly: float,
     beta_x: float,
     beta_y: float,
+    x_min: float = 0.0,
+    y_min: float = 0.0,
     focus_x: float | None = None,
     focus_y: float | None = None,
     band_fraction_x: float = 1.0 / 3.0,
@@ -397,16 +427,26 @@ def build_nonuniform_grid_metadata(
 
     Non-uniform spacing is concentrated inside a rectangular interior band.
     """
-    center_x = 0.5 * lx if focus_x is None else float(focus_x)
-    center_y = 0.5 * ly if focus_y is None else float(focus_y)
+    center_x = x_min + 0.5 * lx if focus_x is None else float(focus_x)
+    center_y = y_min + 0.5 * ly if focus_y is None else float(focus_y)
+    center_local_x = center_x - float(x_min)
+    center_local_y = center_y - float(y_min)
     xf, band_start_x, band_end_x = stretched_faces_center_band(
-        nx, lx, beta_x, center=center_x, band_fraction=band_fraction_x
+        nx, lx, beta_x, center=center_local_x, band_fraction=band_fraction_x
     )
     yf, band_start_y, band_end_y = stretched_faces_center_band(
-        ny, ly, beta_y, center=center_y, band_fraction=band_fraction_y
+        ny, ly, beta_y, center=center_local_y, band_fraction=band_fraction_y
     )
 
-    grid = CartesianGrid(nx=nx, ny=ny, lx=lx, ly=ly, xf=xf, yf=yf)
+    xf = xf + float(x_min)
+    yf = yf + float(y_min)
+    band_start_x += float(x_min)
+    band_end_x += float(x_min)
+    band_start_y += float(y_min)
+    band_end_y += float(y_min)
+
+    grid = CartesianGrid(nx=nx, ny=ny, lx=lx, ly=ly,
+                         x_min=x_min, y_min=y_min, xf=xf, yf=yf)
     metadata = grid.to_metadata()
     metadata["grid_type"] = "nonuniform"
     metadata["beta_x"] = float(beta_x)

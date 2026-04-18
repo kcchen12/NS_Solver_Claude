@@ -122,7 +122,8 @@ class ImmersedBoundary:
 
     def apply(self, u: np.ndarray, v: np.ndarray,
               u_body: float = 0.0, v_body: float = 0.0,
-              dt: float = None, rho: float = 1.0):
+              dt: float = None, rho: float = 1.0,
+              return_face_forcing: bool = False):
         """
         Apply direct forcing **in-place**: set solid-face velocities to the
         prescribed body velocity (default: 0 for stationary body).
@@ -132,15 +133,27 @@ class ImmersedBoundary:
         """
         force_x = 0.0
         force_y = 0.0
+        forcing_u = None
+        forcing_v = None
         if dt is not None and dt > 0.0:
             face_area = self.grid.mean_cell_area
             force_x = rho * face_area * \
                 float(np.sum(u[self.mask_u] - u_body)) / dt
             force_y = rho * face_area * \
                 float(np.sum(v[self.mask_v] - v_body)) / dt
+            if return_face_forcing:
+                forcing_u = np.zeros_like(u)
+                forcing_v = np.zeros_like(v)
+                forcing_u[self.mask_u] = (u_body - u[self.mask_u]) / dt
+                forcing_v[self.mask_v] = (v_body - v[self.mask_v]) / dt
+        elif return_face_forcing:
+            forcing_u = np.zeros_like(u)
+            forcing_v = np.zeros_like(v)
 
         u[self.mask_u] = u_body
         v[self.mask_v] = v_body
+        if return_face_forcing:
+            return force_x, force_y, forcing_u, forcing_v
         return force_x, force_y
 
     @property

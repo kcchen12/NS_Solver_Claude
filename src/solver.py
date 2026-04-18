@@ -80,6 +80,10 @@ class FractionalStepSolver:
         self.t = 0.0
         self.last_ibm_force_x = 0.0
         self.last_ibm_force_y = 0.0
+        self.last_ibm_forcing_u = grid.zeros_u()
+        self.last_ibm_forcing_v = grid.zeros_v()
+        self.last_ibm_forcing_xc = grid.zeros_p()
+        self.last_ibm_forcing_yc = grid.zeros_p()
 
     # ------------------------------------------------------------------
     # Initialisation helpers
@@ -103,6 +107,10 @@ class FractionalStepSolver:
         self.t = 0.0
         self.last_ibm_force_x = 0.0
         self.last_ibm_force_y = 0.0
+        self.last_ibm_forcing_u.fill(0.0)
+        self.last_ibm_forcing_v.fill(0.0)
+        self.last_ibm_forcing_xc.fill(0.0)
+        self.last_ibm_forcing_yc.fill(0.0)
 
     # ------------------------------------------------------------------
     # Single time-step advance
@@ -119,6 +127,10 @@ class FractionalStepSolver:
         nu = self.nu
         self.last_ibm_force_x = 0.0
         self.last_ibm_force_y = 0.0
+        self.last_ibm_forcing_u.fill(0.0)
+        self.last_ibm_forcing_v.fill(0.0)
+        self.last_ibm_forcing_xc.fill(0.0)
+        self.last_ibm_forcing_yc.fill(0.0)
 
         # ----------------------------------------------------------------
         # Step 1 — SSP-RK3 for convection-diffusion (no pressure)
@@ -175,7 +187,20 @@ class FractionalStepSolver:
         # ----------------------------------------------------------------
         apply_post_correction_bc(u_new, v_new, grid, bc, dt=dt)
         if self.ibm is not None and self.ibm.has_solid:
-            self.ibm.apply(u_new, v_new)
+            _, _, self.last_ibm_forcing_u, self.last_ibm_forcing_v = self.ibm.apply(
+                u_new,
+                v_new,
+                dt=dt,
+                return_face_forcing=True,
+            )
+            self.last_ibm_forcing_xc = 0.5 * (
+                self.last_ibm_forcing_u[:-1, :] +
+                self.last_ibm_forcing_u[1:, :]
+            )
+            self.last_ibm_forcing_yc = 0.5 * (
+                self.last_ibm_forcing_v[:, :-1] +
+                self.last_ibm_forcing_v[:, 1:]
+            )
 
         self.u = u_new
         self.v = v_new

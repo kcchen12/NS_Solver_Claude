@@ -204,6 +204,18 @@ def detect_startup_trim_index(
     return 1 if max(cd_z, cl_z) >= 8.0 else 0
 
 
+def detect_tail_fraction_start_index(t: np.ndarray, fraction: float = 0.2) -> int:
+    """Return index corresponding to the final `fraction` of the time span."""
+    if t.size == 0:
+        return 0
+    if t.size == 1:
+        return 0
+
+    frac = float(np.clip(fraction, 1e-6, 1.0))
+    t_start = float(t[0]) + (1.0 - frac) * float(t[-1] - t[0])
+    return int(np.searchsorted(t, t_start, side="left"))
+
+
 def plot_coeff_history(
     csv_path: str,
     save_name: Optional[str] = None,
@@ -220,7 +232,7 @@ def plot_coeff_history(
     c_d_plot = c_d[i_plot_start:]
     c_l_plot = c_l[i_plot_start:]
 
-    i_start = detect_oscillation_start_index(t, c_l, c_d)
+    i_start = detect_tail_fraction_start_index(t, fraction=0.2)
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
     ax1.plot(t_plot, c_d_plot, color="tab:blue", linewidth=1.6)
@@ -244,13 +256,13 @@ def plot_coeff_history(
     else:
         plt.show()
 
-    # Also create oscillation-only view starting from the detected onset.
+    # Also create oscillation-only view from the last 20% of the time range.
     i_start = max(i_start, i_plot_start)
     fig2, (ax3, ax4) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
     ax3.plot(t[i_start:], c_d[i_start:], color="tab:blue", linewidth=1.6)
     ax3.set_ylabel("C_d")
     ax3.set_title(
-        f"Drag/Lift Coefficients at Stable Oscillation Amplitude ({os.path.basename(csv_path)})",
+        f"Drag/Lift Coefficients (Last 20% Time Window) ({os.path.basename(csv_path)})",
         fontsize=12,
         fontweight="bold",
     )
@@ -349,6 +361,80 @@ def plot_snapshot_key(
     plt.close(fig)
 
 
+def _load_ibm_cell_forcing(file_path: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load cell-centered IBM forcing from snapshot, with face-based fallback."""
+    with np.load(file_path, allow_pickle=False) as data:
+        keys = set(data.keys())
+
+        if "ibm_forcing_x_cell" in keys and "ibm_forcing_y_cell" in keys:
+            fx = np.array(data["ibm_forcing_x_cell"], dtype=float)
+            fy = np.array(data["ibm_forcing_y_cell"], dtype=float)
+            return fx, fy
+
+        if "ibm_forcing_u_face" in keys and "ibm_forcing_v_face" in keys:
+            fu = np.array(data["ibm_forcing_u_face"], dtype=float)
+            fv = np.array(data["ibm_forcing_v_face"], dtype=float)
+            fx = 0.5 * (fu[:-1, :] + fu[1:, :])
+            fy = 0.5 * (fv[:, :-1] + fv[:, 1:])
+            return fx, fy
+
+        raise KeyError(
+            "IBM forcing fields not found. Expected ibm_forcing_x_cell/ibm_forcing_y_cell "
+            "or ibm_forcing_u_face/ibm_forcing_v_face in snapshot."
+        )
+
+
+def plot_ibm_forcing(
+    file_path: str,
+    save_name: Optional[str] = None,
+) -> None:
+    """Plot IBM forcing x/y components and magnitude from a snapshot."""
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    fx, fy = _load_ibm_cell_forcing(file_path)
+    fmag = np.sqrt(fx**2 + fy**2)
+
+    vmax_comp = max(float(np.percentile(
+        np.abs(np.concatenate([fx.ravel(), fy.ravel()])), 99.0)), 1e-12)
+    vmax_mag = max(float(np.percentile(fmag, 99.0)), 1e-12)
+
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.5))
+
+    im0 = axes[0].imshow(fx, origin="lower", cmap="seismic",
+                         vmin=-vmax_comp, vmax=vmax_comp)
+    axes[0].set_title("IBM Forcing x (cell)", fontsize=11, fontweight="bold")
+    axes[0].set_xlabel("x")
+    axes[0].set_ylabel("y")
+    fig.colorbar(im0, ax=axes[0])
+
+    im1 = axes[1].imshow(fy, origin="lower", cmap="seismic",
+                         vmin=-vmax_comp, vmax=vmax_comp)
+    axes[1].set_title("IBM Forcing y (cell)", fontsize=11, fontweight="bold")
+    axes[1].set_xlabel("x")
+    axes[1].set_ylabel("y")
+    fig.colorbar(im1, ax=axes[1])
+
+    im2 = axes[2].imshow(fmag, origin="lower",
+                         cmap="inferno", vmin=0.0, vmax=vmax_mag)
+    axes[2].set_title("IBM Forcing Magnitude", fontsize=11, fontweight="bold")
+    axes[2].set_xlabel("x")
+    axes[2].set_ylabel("y")
+    fig.colorbar(im2, ax=axes[2])
+
+    fig.suptitle(
+        f"IBM Forcing Fields: {os.path.basename(file_path)}", fontsize=12, fontweight="bold")
+    fig.tight_layout()
+
+    if save_name:
+        save_path = _result_path(save_name)
+        fig.savefig(save_path, dpi=160, bbox_inches="tight")
+        print(f"Saved figure: {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="View .npz snapshot files with velocity visualization (matplotlib viewer)")
@@ -366,6 +452,8 @@ def main(argv=None):
         "--save", help="save plot to this path instead of showing")
     parser.add_argument("--plot-coeffs", action="store_true",
                         help="plot drag/lift coefficients vs time from forces.csv or aero.csv")
+    parser.add_argument("--plot-ibm", action="store_true",
+                        help="plot IBM forcing x/y/magnitude from a snapshot")
     parser.add_argument("--coeff-file", type=str,
                         help="path to coefficient CSV (default: auto from output/)")
     parser.add_argument("--coeff-indir", type=str, default="output",
@@ -388,6 +476,28 @@ def main(argv=None):
         except Exception as e:
             print(f"Error plotting coefficients: {e}", file=sys.stderr)
             sys.exit(8)
+        return
+
+    if args.plot_ibm:
+        if args.file is None:
+            latest = find_latest_snapshot()
+            if latest is None:
+                print("No snapshot file specified and none found in 'output/'",
+                      file=sys.stderr)
+                parser.print_help()
+                sys.exit(1)
+            args.file = latest
+
+        if not os.path.exists(args.file):
+            print(f"File not found: {args.file}", file=sys.stderr)
+            sys.exit(2)
+
+        save_name = args.save or "ibm_forcing.png"
+        try:
+            plot_ibm_forcing(args.file, save_name=save_name)
+        except Exception as e:
+            print(f"Error plotting IBM forcing: {e}", file=sys.stderr)
+            sys.exit(9)
         return
 
     if args.file is None:

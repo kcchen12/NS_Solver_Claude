@@ -50,6 +50,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ny", type=int, default=cfg.get("ny", 32, int))
     p.add_argument("--lx", type=float, default=cfg.get("lx", 4.0, float))
     p.add_argument("--ly", type=float, default=cfg.get("ly", 2.0, float))
+    p.add_argument("--x-min", type=float, default=cfg.get("x_min", None, float),
+                   help="Domain lower bound in x (optional; defaults to 0)")
+    p.add_argument("--x-max", type=float, default=cfg.get("x_max", None, float),
+                   help="Domain upper bound in x (optional; inferred from x_min+lx)")
+    p.add_argument("--y-min", type=float, default=cfg.get("y_min", None, float),
+                   help="Domain lower bound in y (optional; defaults to 0)")
+    p.add_argument("--y-max", type=float, default=cfg.get("y_max", None, float),
+                   help="Domain upper bound in y (optional; inferred from y_min+ly)")
     p.add_argument("--outdir", type=str,
                    default=cfg.get("outdir", default_outdir, str))
 
@@ -103,7 +111,27 @@ def parse_args() -> argparse.Namespace:
         help="Optional output filename override (default depends on grid type)",
     )
 
-    return p.parse_args(remaining)
+    args = p.parse_args(remaining)
+    args.x_min = 0.0 if args.x_min is None else float(args.x_min)
+    args.y_min = 0.0 if args.y_min is None else float(args.y_min)
+
+    if args.x_max is None:
+        args.x_max = args.x_min + float(args.lx)
+    else:
+        args.x_max = float(args.x_max)
+    if args.y_max is None:
+        args.y_max = args.y_min + float(args.ly)
+    else:
+        args.y_max = float(args.y_max)
+
+    if not args.x_max > args.x_min:
+        p.error("Require x_max > x_min")
+    if not args.y_max > args.y_min:
+        p.error("Require y_max > y_min")
+
+    args.lx = float(args.x_max - args.x_min)
+    args.ly = float(args.y_max - args.y_min)
+    return args
 
 
 def _default_output_name(grid_type: str) -> str:
@@ -119,15 +147,16 @@ if __name__ == "__main__":
     display_path = output_path.replace("\\", "/")
 
     if args.grid_type == "uniform":
-        grid = CartesianGrid(nx=args.nx, ny=args.ny, lx=args.lx, ly=args.ly)
+        grid = CartesianGrid(nx=args.nx, ny=args.ny, lx=args.lx, ly=args.ly,
+                             x_min=args.x_min, y_min=args.y_min)
         save_grid_metadata(output_path, grid)
         print(
             "Saved uniform prepared grid metadata to "
             f"{display_path} for nx={grid.nx}, ny={grid.ny}, lx={grid.lx}, ly={grid.ly}"
         )
     else:
-        focus_x = args.focus_x if args.focus_x >= 0.0 else args.lx / 2.0
-        focus_y = args.focus_y if args.focus_y >= 0.0 else args.ly / 2.0
+        focus_x = args.focus_x if args.focus_x >= 0.0 else args.x_min + args.lx / 2.0
+        focus_y = args.focus_y if args.focus_y >= 0.0 else args.y_min + args.ly / 2.0
         metadata = build_nonuniform_grid_metadata(
             nx=args.nx,
             ny=args.ny,
@@ -135,6 +164,8 @@ if __name__ == "__main__":
             ly=args.ly,
             beta_x=args.beta_x,
             beta_y=args.beta_y,
+            x_min=args.x_min,
+            y_min=args.y_min,
             focus_x=focus_x,
             focus_y=focus_y,
             band_fraction_x=args.band_fraction_x,

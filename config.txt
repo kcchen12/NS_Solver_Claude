@@ -9,6 +9,11 @@ ny = 128
 # Domain dimensions
 lx = 25.0
 ly = 10.0
+# Optional explicit domain bounds (if omitted, solver uses x:[0,lx], y:[0,ly])
+x_min = -12.5
+x_max = 12.5
+y_min = -5.0
+y_max = 5.0
 
 # Physics parameters
 re = 100.0
@@ -59,8 +64,8 @@ runtime_nonuniform_mode = center-band
 
 # Features (true/false)
 cylinder = true
-cylinder_center_x = 8.0
-cylinder_center_y = 5.0
+cylinder_center_x = 0.0
+cylinder_center_y = 0.0
 # Cylinder radius in physical units (set > 0 to override default ly/8)
 cylinder_radius = 0.5
 # If true, re is interpreted as Re_D based on cylinder diameter

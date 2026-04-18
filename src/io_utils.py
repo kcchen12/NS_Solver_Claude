@@ -33,7 +33,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 def save_hdf5(path: str, u: np.ndarray, v: np.ndarray, p: np.ndarray,
-              t: float, meta: dict = None) -> None:
+              t: float, meta: dict = None, extra: dict = None) -> None:
     """Save a snapshot to an HDF5 file."""
     if not _HDF5_AVAILABLE:
         raise ImportError("h5py is required for HDF5 output.")
@@ -42,6 +42,10 @@ def save_hdf5(path: str, u: np.ndarray, v: np.ndarray, p: np.ndarray,
         f.create_dataset("u", data=u, compression="gzip")
         f.create_dataset("v", data=v, compression="gzip")
         f.create_dataset("p", data=p, compression="gzip")
+        if extra:
+            for key, value in extra.items():
+                f.create_dataset(str(key), data=np.array(
+                    value), compression="gzip")
         f.attrs["t"] = t
         if meta:
             for k, v_ in meta.items():
@@ -69,13 +73,16 @@ def load_hdf5(path: str):
 # ---------------------------------------------------------------------------
 
 def save_numpy(path: str, u: np.ndarray, v: np.ndarray, p: np.ndarray,
-               t: float, meta: dict = None) -> None:
+               t: float, meta: dict = None, extra: dict = None) -> None:
     """Save a snapshot to a compressed NumPy archive (.npz)."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     kwargs = dict(u=u, v=v, p=p, t=np.array(t))
     if meta:
         for k, v_ in meta.items():
             kwargs[f"meta_{k}"] = np.array(v_)
+    if extra:
+        for k, v_ in extra.items():
+            kwargs[str(k)] = np.array(v_)
     np.savez_compressed(path, **kwargs)
 
 
@@ -94,7 +101,8 @@ def load_numpy(path: str):
             if not key.startswith("meta_"):
                 continue
             value = data[key]
-            meta[key[5:]] = value.item() if np.ndim(value) == 0 else value.copy()
+            meta[key[5:]] = value.item() if np.ndim(
+                value) == 0 else value.copy()
     return u, v, p, t, meta
 
 
@@ -146,7 +154,8 @@ def load_prepared_grid(path: str) -> CartesianGrid:
 # ---------------------------------------------------------------------------
 
 def save_snapshot(path: str, u, v, p, t: float,
-                  meta: dict = None, fmt: str = "auto") -> None:
+                  meta: dict = None, extra: dict = None,
+                  fmt: str = "auto") -> None:
     """
     Save a snapshot.
 
@@ -159,9 +168,9 @@ def save_snapshot(path: str, u, v, p, t: float,
     if fmt == "auto":
         fmt = "hdf5" if path.endswith((".h5", ".hdf5")) else "numpy"
     if fmt == "hdf5":
-        save_hdf5(path, u, v, p, t, meta)
+        save_hdf5(path, u, v, p, t, meta, extra)
     else:
-        save_numpy(path, u, v, p, t, meta)
+        save_numpy(path, u, v, p, t, meta, extra)
 
 
 def load_snapshot(path: str, fmt: str = "auto"):

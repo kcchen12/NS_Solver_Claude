@@ -161,6 +161,28 @@ class TestIBMForcing:
         assert np.isfinite(solver.last_ibm_force_x)
         assert np.isfinite(solver.last_ibm_force_y)
 
+    def test_ibm_forcing_fields_are_available_for_snapshots(self):
+        """IBM forcing fields should be tracked on faces and cell centres."""
+        g = CartesianGrid(20, 12, lx=2.0, ly=1.0)
+        bc = channel_bc()
+        ibm = ImmersedBoundary(g)
+        ibm.add_circle(cx=0.5, cy=0.5, radius=0.1)
+
+        solver = FractionalStepSolver(g, bc, nu=0.01, ibm=ibm)
+        solver.init_fields(u0=1.0)
+
+        dt = solver.suggest_dt(cfl_target=0.3)
+        solver.step(dt)
+
+        assert solver.last_ibm_forcing_u.shape == g.u_shape
+        assert solver.last_ibm_forcing_v.shape == g.v_shape
+        assert solver.last_ibm_forcing_xc.shape == g.p_shape
+        assert solver.last_ibm_forcing_yc.shape == g.p_shape
+        assert np.all(np.isfinite(solver.last_ibm_forcing_u))
+        assert np.all(np.isfinite(solver.last_ibm_forcing_v))
+        assert np.all(np.isfinite(solver.last_ibm_forcing_xc))
+        assert np.all(np.isfinite(solver.last_ibm_forcing_yc))
+
 
 # ---------------------------------------------------------------------------
 # Suggest dt
