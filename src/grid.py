@@ -409,6 +409,71 @@ def stretched_faces_center_band(
     return faces, band_start, band_end
 
 
+def stretched_faces_center_uniform(
+    n: int,
+    length: float,
+    beta: float,
+    center: float | None = None,
+    uniform_fraction: float = 1.0 / 3.0,
+) -> tuple[np.ndarray, float, float]:
+    """Faces with a uniform central band and stretched outer regions.
+
+    The middle band keeps constant spacing, while the left and right outer
+    segments are smoothly stretched so cells grow away from the band toward
+    the boundaries.
+    """
+    if n <= 0:
+        raise ValueError("n must be positive")
+    if length <= 0.0:
+        raise ValueError("length must be positive")
+
+    frac = float(np.clip(uniform_fraction, 1e-3, 1.0))
+    core_width = frac * length
+    half_width = 0.5 * core_width
+    eps = 1e-12 * max(1.0, length)
+
+    center_default = 0.5 * length if center is None else float(center)
+    center_clamped = float(
+        np.clip(center_default, half_width + eps, length - half_width - eps)
+    )
+    core_start = max(0.0, center_clamped - half_width)
+    core_end = min(length, center_clamped + half_width)
+
+    segment_lengths = np.array(
+        [core_start, core_end - core_start, length - core_end],
+        dtype=float,
+    )
+    core_weight = 1.0 + 0.25 * max(beta, 0.0)
+    segment_weights = np.array([1.0, core_weight, 1.0], dtype=float)
+    segment_counts = _allocate_piecewise_cells(
+        n, segment_lengths, segment_weights)
+
+    segments = []
+
+    left_n = int(segment_counts[0])
+    if left_n > 0:
+        segments.append(_cluster_to_upper_end(left_n, core_start, beta))
+
+    core_n = int(segment_counts[1])
+    if core_n > 0:
+        segments.append(np.linspace(core_start, core_end, core_n + 1))
+
+    right_n = int(segment_counts[2])
+    if right_n > 0:
+        segments.append(core_end + _cluster_to_lower_end(
+            right_n, length - core_end, beta))
+
+    if segments:
+        faces = np.concatenate([segments[0]] + [segment[1:]
+                               for segment in segments[1:]])
+    else:
+        faces = np.linspace(0.0, length, n + 1)
+
+    faces[0] = 0.0
+    faces[-1] = length
+    return faces, core_start, core_end
+
+
 def build_nonuniform_grid_metadata(
     nx: int,
     ny: int,
@@ -422,21 +487,39 @@ def build_nonuniform_grid_metadata(
     focus_y: float | None = None,
     band_fraction_x: float = 1.0 / 3.0,
     band_fraction_y: float = 1.0 / 3.0,
+    nonuniform_mode: str = "center-band",
+    uniform_fraction_x: float = 1.0 / 3.0,
+    uniform_fraction_y: float = 1.0 / 3.0,
 ) -> dict:
     """Build serializable metadata for a 2-D non-uniform Cartesian grid.
 
-    Non-uniform spacing is concentrated inside a rectangular interior band.
+    Supported modes:
+    - center-band: increased density inside a central rectangular band
+    - center-uniform: constant spacing in a central rectangular core with
+      stretched outer regions toward the boundaries
     """
+    mode = str(nonuniform_mode).strip().lower()
     center_x = x_min + 0.5 * lx if focus_x is None else float(focus_x)
     center_y = y_min + 0.5 * ly if focus_y is None else float(focus_y)
     center_local_x = center_x - float(x_min)
     center_local_y = center_y - float(y_min)
-    xf, band_start_x, band_end_x = stretched_faces_center_band(
-        nx, lx, beta_x, center=center_local_x, band_fraction=band_fraction_x
-    )
-    yf, band_start_y, band_end_y = stretched_faces_center_band(
-        ny, ly, beta_y, center=center_local_y, band_fraction=band_fraction_y
-    )
+
+    if mode == "center-band":
+        xf, band_start_x, band_end_x = stretched_faces_center_band(
+            nx, lx, beta_x, center=center_local_x, band_fraction=band_fraction_x
+        )
+        yf, band_start_y, band_end_y = stretched_faces_center_band(
+            ny, ly, beta_y, center=center_local_y, band_fraction=band_fraction_y
+        )
+    elif mode == "center-uniform":
+        xf, band_start_x, band_end_x = stretched_faces_center_uniform(
+            nx, lx, beta_x, center=center_local_x, uniform_fraction=uniform_fraction_x
+        )
+        yf, band_start_y, band_end_y = stretched_faces_center_uniform(
+            ny, ly, beta_y, center=center_local_y, uniform_fraction=uniform_fraction_y
+        )
+    else:
+        raise ValueError(f"Unsupported nonuniform_mode '{nonuniform_mode}'")
 
     xf = xf + float(x_min)
     yf = yf + float(y_min)
@@ -451,11 +534,13 @@ def build_nonuniform_grid_metadata(
     metadata["grid_type"] = "nonuniform"
     metadata["beta_x"] = float(beta_x)
     metadata["beta_y"] = float(beta_y)
-    metadata["nonuniform_mode"] = "center-band"
+    metadata["nonuniform_mode"] = mode
     metadata["focus_x"] = float(center_x)
     metadata["focus_y"] = float(center_y)
     metadata["band_fraction_x"] = float(band_fraction_x)
     metadata["band_fraction_y"] = float(band_fraction_y)
+    metadata["uniform_fraction_x"] = float(uniform_fraction_x)
+    metadata["uniform_fraction_y"] = float(uniform_fraction_y)
     metadata["band_start_x"] = float(band_start_x)
     metadata["band_end_x"] = float(band_end_x)
     metadata["band_start_y"] = float(band_start_y)

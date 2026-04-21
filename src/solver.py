@@ -104,6 +104,8 @@ class FractionalStepSolver:
             self.v[:, 1:-1] += initial_v_perturbation
         # Enforce BCs on initial state
         apply_velocity_bc(self.u, self.v, self.grid, self.bc)
+        if self.ibm is not None and self.ibm.has_solid:
+            self.ibm.apply(self.u, self.v, time=0.0)
         self.t = 0.0
         self.last_ibm_force_x = 0.0
         self.last_ibm_force_y = 0.0
@@ -139,7 +141,7 @@ class FractionalStepSolver:
             """RHS callable for the RK integrator."""
             apply_velocity_bc(u, v, grid, bc, dt=dt)
             if self.ibm is not None and self.ibm.has_solid:
-                self.ibm.apply(u, v)
+                self.ibm.apply(u, v, time=self.t)
             Lu = rhs_u(u, v, grid, bc, nu)
             Lv = rhs_v(u, v, grid, bc, nu)
             return Lu, Lv
@@ -150,7 +152,7 @@ class FractionalStepSolver:
         apply_velocity_bc(u_star, v_star, grid, bc, dt=dt)
         if self.ibm is not None and self.ibm.has_solid:
             self.last_ibm_force_x, self.last_ibm_force_y = self.ibm.apply(
-                u_star, v_star, dt=dt
+                u_star, v_star, dt=dt, time=self.t + dt
             )
 
         # ----------------------------------------------------------------
@@ -192,6 +194,7 @@ class FractionalStepSolver:
                 v_new,
                 dt=dt,
                 return_face_forcing=True,
+                time=self.t + dt,
             )
             self.last_ibm_forcing_xc = 0.5 * (
                 self.last_ibm_forcing_u[:-1, :] +

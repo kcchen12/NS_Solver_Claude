@@ -37,8 +37,27 @@ Helper methods allow adding:
     - Arbitrary masks (load from array)
 """
 
+from dataclasses import dataclass
+
 import numpy as np
 from src.grid import CartesianGrid
+
+
+@dataclass
+class RotatingCircleSpec:
+    cx: float
+    cy: float
+    radius: float
+    omega_amplitude: float
+    frequency: float
+    phase: float
+    mask_u: np.ndarray
+    mask_v: np.ndarray
+
+    def angular_velocity(self, time: float) -> float:
+        return float(
+            self.omega_amplitude * np.sin(2.0 * np.pi * self.frequency * time + self.phase)
+        )
 
 
 class ImmersedBoundary:
@@ -55,6 +74,7 @@ class ImmersedBoundary:
         # Binary masks: 1 = solid, 0 = fluid
         self.mask_u = np.zeros(grid.u_shape, dtype=bool)
         self.mask_v = np.zeros(grid.v_shape, dtype=bool)
+        self.rotating_circles: list[RotatingCircleSpec] = []
 
     # ------------------------------------------------------------------
     # Geometry builders
@@ -85,6 +105,52 @@ class ImmersedBoundary:
         xc = grid.xc[:, np.newaxis]
         yf = grid.yf[np.newaxis, :]
         self.mask_v |= ((xc - cx) ** 2 + (yf - cy) ** 2) <= radius_sq
+
+    def add_rotating_circle(
+        self,
+        cx: float,
+        cy: float,
+        radius: float,
+        omega_amplitude: float,
+        frequency: float,
+        phase: float = 0.0,
+    ) -> None:
+        """Add a circular cylinder with sinusoidal back-and-forth rotation.
+
+        The imposed angular velocity is
+
+            omega(t) = omega_amplitude * sin(2*pi*frequency*t + phase)
+
+        with tangential wall velocity
+
+            u = -omega(t) * (y - cy)
+            v =  omega(t) * (x - cx)
+        """
+        grid = self.grid
+        radius_sq = radius**2
+
+        xf = grid.xf[:, np.newaxis]
+        yc = grid.yc[np.newaxis, :]
+        mask_u = ((xf - cx) ** 2 + (yc - cy) ** 2) <= radius_sq
+
+        xc = grid.xc[:, np.newaxis]
+        yf = grid.yf[np.newaxis, :]
+        mask_v = ((xc - cx) ** 2 + (yf - cy) ** 2) <= radius_sq
+
+        self.mask_u |= mask_u
+        self.mask_v |= mask_v
+        self.rotating_circles.append(
+            RotatingCircleSpec(
+                cx=float(cx),
+                cy=float(cy),
+                radius=float(radius),
+                omega_amplitude=float(omega_amplitude),
+                frequency=float(frequency),
+                phase=float(phase),
+                mask_u=mask_u,
+                mask_v=mask_v,
+            )
+        )
 
     def add_rectangle(self, x0: float, x1: float,
                       y0: float, y1: float,
@@ -123,7 +189,8 @@ class ImmersedBoundary:
     def apply(self, u: np.ndarray, v: np.ndarray,
               u_body: float = 0.0, v_body: float = 0.0,
               dt: float = None, rho: float = 1.0,
-              return_face_forcing: bool = False):
+              return_face_forcing: bool = False,
+              time: float = 0.0):
         """
         Apply direct forcing **in-place**: set solid-face velocities to the
         prescribed body velocity (default: 0 for stationary body).
@@ -135,23 +202,38 @@ class ImmersedBoundary:
         force_y = 0.0
         forcing_u = None
         forcing_v = None
+        u_target = np.full_like(u, float(u_body))
+        v_target = np.full_like(v, float(v_body))
+
+        if self.rotating_circles:
+            u_y = np.broadcast_to(
+                self.grid.yc[np.newaxis, :], self.grid.u_shape)
+            v_x = np.broadcast_to(
+                self.grid.xc[:, np.newaxis], self.grid.v_shape)
+            for spec in self.rotating_circles:
+                omega = spec.angular_velocity(time)
+                u_target[spec.mask_u] = -omega * (u_y[spec.mask_u] - spec.cy)
+                v_target[spec.mask_v] = omega * (v_x[spec.mask_v] - spec.cx)
+
         if dt is not None and dt > 0.0:
             face_area = self.grid.mean_cell_area
             force_x = rho * face_area * \
-                float(np.sum(u[self.mask_u] - u_body)) / dt
+                float(np.sum(u[self.mask_u] - u_target[self.mask_u])) / dt
             force_y = rho * face_area * \
-                float(np.sum(v[self.mask_v] - v_body)) / dt
+                float(np.sum(v[self.mask_v] - v_target[self.mask_v])) / dt
             if return_face_forcing:
                 forcing_u = np.zeros_like(u)
                 forcing_v = np.zeros_like(v)
-                forcing_u[self.mask_u] = (u_body - u[self.mask_u]) / dt
-                forcing_v[self.mask_v] = (v_body - v[self.mask_v]) / dt
+                forcing_u[self.mask_u] = (
+                    u_target[self.mask_u] - u[self.mask_u]) / dt
+                forcing_v[self.mask_v] = (
+                    v_target[self.mask_v] - v[self.mask_v]) / dt
         elif return_face_forcing:
             forcing_u = np.zeros_like(u)
             forcing_v = np.zeros_like(v)
 
-        u[self.mask_u] = u_body
-        v[self.mask_v] = v_body
+        u[self.mask_u] = u_target[self.mask_u]
+        v[self.mask_v] = v_target[self.mask_v]
         if return_face_forcing:
             return force_x, force_y, forcing_u, forcing_v
         return force_x, force_y

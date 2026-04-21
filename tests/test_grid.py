@@ -5,6 +5,7 @@ from src.grid import (
     CartesianGrid,
     build_nonuniform_grid_metadata,
     stretched_faces_center_band,
+    stretched_faces_center_uniform,
     stretched_faces_tanh,
 )
 from src.io_utils import load_grid_metadata, load_grid_metadata_dict, save_grid_metadata, save_grid_metadata_dict
@@ -123,6 +124,22 @@ class TestPreparedNonuniformGrid:
         assert np.isclose(band_start, 0.0)
         assert np.isclose(band_end, 3.0)
 
+    def test_center_uniform_has_uniform_core_and_tanh_outer_stretch(self):
+        xf, core_start, core_end = stretched_faces_center_uniform(
+            80, 8.0, beta=2.0, uniform_fraction=0.5
+        )
+        dx = np.diff(xf)
+        xc = 0.5 * (xf[:-1] + xf[1:])
+        core_mask = (xc >= core_start) & (xc <= core_end)
+        left_mask = xc < core_start
+        right_mask = xc > core_end
+
+        assert np.all(dx > 0.0)
+        assert np.allclose(dx[core_mask], dx[core_mask][0], rtol=1e-10, atol=1e-12)
+        assert dx[core_mask][0] < 8.0 / 80.0
+        assert dx[left_mask][0] > dx[left_mask][-1]
+        assert dx[right_mask][-1] > dx[right_mask][0]
+
     def test_nonuniform_metadata_has_expected_shapes(self):
         meta = build_nonuniform_grid_metadata(
             nx=8,
@@ -142,6 +159,33 @@ class TestPreparedNonuniformGrid:
         assert np.isclose(meta["band_fraction_y"], 1.0 / 3.0)
         assert np.isclose(meta["xf"][0], 0.0)
         assert np.isclose(meta["xf"][-1], 2.0)
+
+    def test_center_uniform_metadata_tracks_mode_and_core_fraction(self):
+        meta = build_nonuniform_grid_metadata(
+            nx=80,
+            ny=40,
+            lx=8.0,
+            ly=4.0,
+            beta_x=2.0,
+            beta_y=1.5,
+            nonuniform_mode="center-uniform",
+            uniform_fraction_x=0.5,
+            uniform_fraction_y=0.4,
+        )
+        dx = np.asarray(meta["dx"])
+        dy = np.asarray(meta["dy"])
+        xc = np.asarray(meta["xc"])
+        yc = np.asarray(meta["yc"])
+        x_core_mask = (xc >= meta["band_start_x"]) & (xc <= meta["band_end_x"])
+        y_core_mask = (yc >= meta["band_start_y"]) & (yc <= meta["band_end_y"])
+
+        assert meta["nonuniform_mode"] == "center-uniform"
+        assert np.isclose(meta["uniform_fraction_x"], 0.5)
+        assert np.isclose(meta["uniform_fraction_y"], 0.4)
+        assert np.allclose(dx[x_core_mask], dx[x_core_mask][0], rtol=1e-10, atol=1e-12)
+        assert np.allclose(dy[y_core_mask], dy[y_core_mask][0], rtol=1e-10, atol=1e-12)
+        assert dx[x_core_mask][0] < 8.0 / 80.0
+        assert dy[y_core_mask][0] < 4.0 / 40.0
 
     def test_nonuniform_metadata_respects_custom_bounds(self):
         meta = build_nonuniform_grid_metadata(

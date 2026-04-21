@@ -10,6 +10,11 @@ from src.grid import CartesianGrid, build_nonuniform_grid_metadata
 from src.io_utils import save_grid_metadata, save_grid_metadata_dict
 
 
+def _normalize_nonuniform_mode(raw_value: str | None) -> str:
+    value = "center-band" if raw_value is None else str(raw_value).strip().lower()
+    return value if value in {"center-band", "center-uniform"} else "center-band"
+
+
 def parse_args() -> argparse.Namespace:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     default_config = os.path.join(script_dir, "config.txt")
@@ -38,8 +43,19 @@ def parse_args() -> argparse.Namespace:
         "pre_nonuniform_beta_x", 2.0, float), float)
     beta_y_default = cfg.get("grid_beta_y", cfg.get(
         "pre_nonuniform_beta_y", 2.0, float), float)
+    nonuniform_mode_default = _normalize_nonuniform_mode(
+        cfg.get(
+            "grid_nonuniform_mode",
+            cfg.get("runtime_nonuniform_mode", "center-band", str),
+            str,
+        )
+    )
     band_fraction_x_default = cfg.get("grid_band_fraction_x", 1.0 / 3.0, float)
     band_fraction_y_default = cfg.get("grid_band_fraction_y", 1.0 / 3.0, float)
+    uniform_fraction_x_default = cfg.get(
+        "grid_uniform_fraction_x", 1.0 / 3.0, float)
+    uniform_fraction_y_default = cfg.get(
+        "grid_uniform_fraction_y", 1.0 / 3.0, float)
 
     p = argparse.ArgumentParser(
         description="Pre-generate prepared grid metadata for post-processing and setup",
@@ -81,16 +97,35 @@ def parse_args() -> argparse.Namespace:
         help="y-direction center-density boost for nonuniform grid (<=0 gives uniform spacing)",
     )
     p.add_argument(
+        "--nonuniform-mode",
+        type=str,
+        choices=["center-band", "center-uniform"],
+        default=nonuniform_mode_default,
+        help="Nonuniform-grid generation mode",
+    )
+    p.add_argument(
         "--band-fraction-x",
         type=float,
         default=band_fraction_x_default,
-        help="Fraction of the x-domain width refined in the nonuniform center band",
+        help="Fraction of the x-domain width refined in the center-band mode",
     )
     p.add_argument(
         "--band-fraction-y",
         type=float,
         default=band_fraction_y_default,
-        help="Fraction of the y-domain width refined in the nonuniform center band",
+        help="Fraction of the y-domain width refined in the center-band mode",
+    )
+    p.add_argument(
+        "--uniform-fraction-x",
+        type=float,
+        default=uniform_fraction_x_default,
+        help="Fraction of the x-domain kept uniform in the center-uniform mode",
+    )
+    p.add_argument(
+        "--uniform-fraction-y",
+        type=float,
+        default=uniform_fraction_y_default,
+        help="Fraction of the y-domain kept uniform in the center-uniform mode",
     )
     p.add_argument(
         "--focus-x",
@@ -170,12 +205,17 @@ if __name__ == "__main__":
             focus_y=focus_y,
             band_fraction_x=args.band_fraction_x,
             band_fraction_y=args.band_fraction_y,
+            nonuniform_mode=args.nonuniform_mode,
+            uniform_fraction_x=args.uniform_fraction_x,
+            uniform_fraction_y=args.uniform_fraction_y,
         )
         save_grid_metadata_dict(output_path, metadata)
         print(
             "Saved nonuniform prepared grid metadata to "
             f"{display_path} for nx={args.nx}, ny={args.ny}, lx={args.lx}, ly={args.ly}, "
             f"beta_x={args.beta_x}, beta_y={args.beta_y}, "
+            f"mode={args.nonuniform_mode}, "
             f"band_fraction_x={args.band_fraction_x}, band_fraction_y={args.band_fraction_y}, "
-            f"mode=center-band, center=({focus_x}, {focus_y})"
+            f"uniform_fraction_x={args.uniform_fraction_x}, uniform_fraction_y={args.uniform_fraction_y}, "
+            f"center=({focus_x}, {focus_y})"
         )

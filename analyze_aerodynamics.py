@@ -119,13 +119,19 @@ def _read_config(config_path: str) -> Dict[str, float]:
     parser = ConfigParser(config_path)
     config: Dict[str, float] = {}
     for key, raw_value in parser.get_all().items():
-        bool_value = parser.get(key, None, bool)
-        if isinstance(bool_value, bool):
-            config[key] = 1.0 if bool_value else 0.0
+        value_str = str(raw_value).strip().lower()
+        if value_str in {"true", "1", "yes", "on"}:
+            config[key] = 1.0
             continue
-        float_value = parser.get(key, None, float)
-        if float_value is not None:
-            config[key] = float(float_value)
+        if value_str in {"false", "0", "no", "off"}:
+            config[key] = 0.0
+            continue
+        try:
+            int_value = int(raw_value)
+        except (TypeError, ValueError):
+            int_value = None
+        if int_value is not None:
+            config[key] = float(int_value)
             continue
         try:
             config[key] = float(raw_value)

@@ -46,12 +46,19 @@ outdir = output
 
 # Unified grid controls used by both main.py and pre_generate_grid.py
 # uniform_grid = true  -> uniform mesh
-# uniform_grid = false -> nonuniform center-band mesh
+# uniform_grid = false -> nonuniform mesh (see mode below)
 uniform_grid = false
+# center-band    -> denser cells inside a central band
+# center-uniform -> uniform central core with tanh-stretched outer regions
+grid_nonuniform_mode = center-band
 grid_beta_x = 2.0
 grid_beta_y = 2.0
+# Used by center-band mode
 grid_band_fraction_x = 0.333333
 grid_band_fraction_y = 0.333333
+# Used by center-uniform mode
+grid_uniform_fraction_x = 0.50
+grid_uniform_fraction_y = 0.50
 
 # Optional legacy compatibility keys still exist in the parser, but the
 # unified keys above are the recommended way to configure new runs.
@@ -61,6 +68,10 @@ cylinder = true
 cylinder_center_x = 8.0
 cylinder_center_y = 5.0
 cylinder_radius = 0.5
+cylinder_rotation_mode = stationary
+cylinder_rotation_amplitude = 0.0
+cylinder_rotation_frequency = 0.0
+cylinder_rotation_phase_deg = 0.0
 re_is_cylinder_based = true
 plot = true
 verbose = true

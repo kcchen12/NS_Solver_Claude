@@ -10,8 +10,8 @@ ny = 128
 lx = 25.0
 ly = 10.0
 # Optional explicit domain bounds (if omitted, solver uses x:[0,lx], y:[0,ly])
-x_min = -12.5
-x_max = 12.5
+x_min = -10.0
+x_max = 15.0
 y_min = -5.0
 y_max = 5.0
 
@@ -52,15 +52,27 @@ save_dt = 0.02
 outdir = output
 # Unified grid controls (used by both main.py and pre_generate_grid.py)
 uniform_grid = false
-# Nonuniform density controls (smooth center-density boost,)
+# Nonuniform mode:
+#   center-band    -> denser cells inside a central band
+#   center-uniform -> uniform central core with tanh-stretched outer regions
+grid_nonuniform_mode = center-uniform
+
+# Tanh stretching strength / center-density strength.
 # Set <=0 in a direction to make that direction uniform.
 grid_beta_x = 2.0
 grid_beta_y = 2.0
-# Fraction of each domain direction covered by the refined center band.
+
+# Used only by center-band mode:
+# fraction of each domain direction covered by the refined center band.
 grid_band_fraction_x = 0.333333
 grid_band_fraction_y = 0.333333
-# Runtime nonuniform mode (center-band)
-runtime_nonuniform_mode = center-band
+
+# Used only by center-uniform mode:
+# fraction of each domain direction kept uniform before the outer tanh stretch.
+grid_uniform_fraction_x = 0.50
+grid_uniform_fraction_y = 0.60
+# Legacy compatibility key still read by the parser
+runtime_nonuniform_mode = center-uniform
 
 # Features (true/false)
 cylinder = true
@@ -73,3 +85,11 @@ re_is_cylinder_based = true
 plot = true
 verbose = true
 
+# Cylinder rotation:
+#   stationary  -> fixed cylinder
+#   oscillatory -> back-and-forth sinusoidal angular velocity
+cylinder_rotation_mode = oscillatory
+# omega(t) = amplitude * sin(2*pi*frequency*t + phase)
+cylinder_rotation_amplitude = 2.0
+cylinder_rotation_frequency = 0.18
+cylinder_rotation_phase_deg = 0.0

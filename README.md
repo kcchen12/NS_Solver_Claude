@@ -82,8 +82,10 @@ Core grid and physics:
 Grid control:
 
 - `uniform_grid`: `true` for uniform, `false` for nonuniform
-- `grid_beta_x`, `grid_beta_y`: smooth center-density boost in each direction
-- `grid_band_fraction_x`, `grid_band_fraction_y`: fraction of the domain refined around the center band
+- `grid_nonuniform_mode`: `center-band` or `center-uniform`
+- `grid_beta_x`, `grid_beta_y`: tanh stretch strength / center-density strength in each direction
+- `grid_band_fraction_x`, `grid_band_fraction_y`: fraction of the domain refined around the center band in `center-band` mode
+- `grid_uniform_fraction_x`, `grid_uniform_fraction_y`: fraction of the domain kept uniform in the middle in `center-uniform` mode
 
 Boundary conditions:
 
@@ -100,6 +102,8 @@ Cylinder / immersed boundary:
 - `cylinder`
 - `cylinder_center_x`, `cylinder_center_y`
 - `cylinder_radius`
+- `cylinder_rotation_mode`: `stationary` or `oscillatory`
+- `cylinder_rotation_amplitude`, `cylinder_rotation_frequency`, `cylinder_rotation_phase_deg`
 - `re_is_cylinder_based`
 
 Initialization and runtime plotting:
@@ -140,17 +144,47 @@ This does not permanently change the configured boundary condition values. It on
 
 ### Nonuniform Grid
 
-The current nonuniform grid is a center-band refinement, not a boundary-layer stretch.
+Two nonuniform modes are available:
 
-- Outside the refined band, spacing stays close to normal uniform spacing
-- Inside the band, cell density increases smoothly toward the middle
-- `beta_x` and `beta_y` control how much denser the middle becomes
-- `band_fraction_x` and `band_fraction_y` control how wide that refined middle region is
+- `center-band`: spacing stays near uniform outside a central band, then decreases smoothly toward the band center
+- `center-uniform`: spacing stays constant inside a central rectangular core, while the outer regions stretch gradually toward the boundaries using tanh mappings
+
+In both modes:
+
+- `beta_x` and `beta_y` control the strength of the gradual spacing change
+- the nonuniform region is centered on `cylinder_center_x/y` when provided, otherwise on the domain midpoint
 
 Prepared grid metadata is saved automatically into `outdir` as either:
 
 - `uniform_grid.npz`
 - `nonuniform_grid.npz`
+
+### Oscillating Cylinder
+
+The immersed cylinder can optionally rotate back and forth with a sinusoidal
+angular velocity:
+
+```text
+omega(t) = A * sin(2*pi*f*t + phi)
+```
+
+where:
+
+- `A = cylinder_rotation_amplitude`
+- `f = cylinder_rotation_frequency`
+- `phi = cylinder_rotation_phase_deg` converted to radians
+
+Enable it in `config.txt` with:
+
+```text
+cylinder_rotation_mode = oscillatory
+cylinder_rotation_amplitude = 2.0
+cylinder_rotation_frequency = 0.5
+cylinder_rotation_phase_deg = 0.0
+```
+
+The solver then imposes tangential wall velocity on the cylinder surface
+through the immersed-boundary forcing rather than keeping the body stationary.
 
 ## Prepared Grid Generation
 
@@ -163,15 +197,17 @@ python pre_generate_grid.py
 Generate a nonuniform prepared grid:
 
 ```bash
-python pre_generate_grid.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0 --band-fraction-x 0.33 --band-fraction-y 0.33
+python pre_generate_grid.py --grid-type nonuniform --nonuniform-mode center-uniform --beta-x 2.5 --beta-y 2.0 --uniform-fraction-x 0.5 --uniform-fraction-y 0.6
 ```
 
 Common options:
 
 - `--nx`, `--ny`, `--lx`, `--ly`
 - `--grid-type uniform|nonuniform`
+- `--nonuniform-mode center-band|center-uniform`
 - `--beta-x`, `--beta-y`
 - `--band-fraction-x`, `--band-fraction-y`
+- `--uniform-fraction-x`, `--uniform-fraction-y`
 - `--focus-x`, `--focus-y`
 - `--outdir`
 - `--output-name`

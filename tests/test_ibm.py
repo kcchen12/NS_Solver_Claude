@@ -44,6 +44,26 @@ class TestIBMCircle:
         assert np.all(u[~self.ibm.mask_u] == 2.0)
         assert np.all(v[~self.ibm.mask_v] == 3.0)
 
+    def test_rotating_circle_imposes_tangential_velocity(self):
+        cx, cy, r = 1.0, 0.75, 0.3
+        omega = 2.5
+        self.ibm.add_rotating_circle(
+            cx, cy, r, omega_amplitude=omega, frequency=0.0, phase=np.pi / 2.0
+        )
+        u = np.zeros(self.g.u_shape)
+        v = np.zeros(self.g.v_shape)
+        self.ibm.apply(u, v, time=0.0)
+
+        i_u = int(np.argmin(np.abs(self.g.xf - cx)))
+        j_u = int(np.argmin(np.abs(self.g.yc - (cy + 0.1))))
+        assert self.ibm.mask_u[i_u, j_u]
+        assert np.isclose(u[i_u, j_u], -omega * (self.g.yc[j_u] - cy))
+
+        i_v = int(np.argmin(np.abs(self.g.xc - (cx + 0.1))))
+        j_v = int(np.argmin(np.abs(self.g.yf - cy)))
+        assert self.ibm.mask_v[i_v, j_v]
+        assert np.isclose(v[i_v, j_v], omega * (self.g.xc[i_v] - cx))
+
 
 class TestIBMRectangle:
     def test_add_rectangle(self):

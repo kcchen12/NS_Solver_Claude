@@ -183,6 +183,28 @@ class TestIBMForcing:
         assert np.all(np.isfinite(solver.last_ibm_forcing_xc))
         assert np.all(np.isfinite(solver.last_ibm_forcing_yc))
 
+    def test_rotating_ibm_circle_imposes_nonzero_wall_velocity(self):
+        g = CartesianGrid(20, 12, lx=2.0, ly=1.0)
+        bc = channel_bc()
+        ibm = ImmersedBoundary(g)
+        ibm.add_rotating_circle(
+            cx=0.5,
+            cy=0.5,
+            radius=0.1,
+            omega_amplitude=3.0,
+            frequency=0.0,
+            phase=np.pi / 2.0,
+        )
+
+        solver = FractionalStepSolver(g, bc, nu=0.01, ibm=ibm)
+        solver.init_fields(u0=1.0)
+
+        dt = solver.suggest_dt(cfl_target=0.3)
+        solver.step(dt)
+
+        assert np.any(np.abs(solver.u[ibm.mask_u]) > 0.0)
+        assert np.any(np.abs(solver.v[ibm.mask_v]) > 0.0)
+
 
 # ---------------------------------------------------------------------------
 # Suggest dt

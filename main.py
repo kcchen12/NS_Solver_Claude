@@ -75,6 +75,16 @@ def _normalize_bc_type(raw_value: str, default: str) -> str:
     return value if value in valid else default
 
 
+def _normalize_nonuniform_mode(raw_value: str | None) -> str:
+    value = "center-band" if raw_value is None else str(raw_value).strip().lower()
+    return value if value in {"center-band", "center-uniform"} else "center-band"
+
+
+def _normalize_cylinder_rotation_mode(raw_value: str | None) -> str:
+    value = "stationary" if raw_value is None else str(raw_value).strip().lower()
+    return value if value in {"stationary", "oscillatory"} else "stationary"
+
+
 def parse_args():
     """
     Parse command-line arguments and merge with config file.
@@ -135,8 +145,19 @@ def parse_args():
             "pre_nonuniform_beta_y", 2.0, float), float),
         float,
     )
+    nonuniform_mode_default = _normalize_nonuniform_mode(
+        cfg.get(
+            "grid_nonuniform_mode",
+            cfg.get("runtime_nonuniform_mode", "center-band", str),
+            str,
+        )
+    )
     band_fraction_x_default = cfg.get("grid_band_fraction_x", 1.0 / 3.0, float)
     band_fraction_y_default = cfg.get("grid_band_fraction_y", 1.0 / 3.0, float)
+    uniform_fraction_x_default = cfg.get(
+        "grid_uniform_fraction_x", 1.0 / 3.0, float)
+    uniform_fraction_y_default = cfg.get(
+        "grid_uniform_fraction_y", 1.0 / 3.0, float)
 
     # Now parse all arguments with defaults from config file
     p = argparse.ArgumentParser(description="2-D Navier-Stokes solver")
@@ -176,12 +197,22 @@ def parse_args():
     p.add_argument("--beta-y", type=float,
                    default=beta_y_default,
                    help="y-direction center-density boost for nonuniform grid")
+    p.add_argument("--nonuniform-mode", type=str,
+                   choices=["center-band", "center-uniform"],
+                   default=nonuniform_mode_default,
+                   help="Nonuniform-grid generation mode")
     p.add_argument("--band-fraction-x", type=float,
                    default=band_fraction_x_default,
-                   help="Fraction of the x-domain width refined in the nonuniform center band")
+                   help="Fraction of the x-domain width refined in the center-band mode")
     p.add_argument("--band-fraction-y", type=float,
                    default=band_fraction_y_default,
-                   help="Fraction of the y-domain width refined in the nonuniform center band")
+                   help="Fraction of the y-domain width refined in the center-band mode")
+    p.add_argument("--uniform-fraction-x", type=float,
+                   default=uniform_fraction_x_default,
+                   help="Fraction of the x-domain kept uniform in the center-uniform mode")
+    p.add_argument("--uniform-fraction-y", type=float,
+                   default=uniform_fraction_y_default,
+                   help="Fraction of the y-domain kept uniform in the center-uniform mode")
     p.add_argument("--cylinder", type=str_to_bool, default=cfg.get("cylinder", False, bool),
                    help="Add an immersed-boundary cylinder at the domain centre")
     p.add_argument("--cylinder-radius", type=float,
@@ -196,6 +227,20 @@ def parse_args():
     p.add_argument("--re-is-cylinder-based", type=str_to_bool,
                    default=cfg.get("re_is_cylinder_based", True, bool),
                    help="Interpret --re as Re_D based on cylinder diameter when cylinder is enabled")
+    p.add_argument("--cylinder-rotation-mode", type=str,
+                   choices=["stationary", "oscillatory"],
+                   default=_normalize_cylinder_rotation_mode(
+                       cfg.get("cylinder_rotation_mode", "stationary", str)),
+                   help="Cylinder wall-motion mode")
+    p.add_argument("--cylinder-rotation-amplitude", type=float,
+                   default=cfg.get("cylinder_rotation_amplitude", 0.0, float),
+                   help="Angular-velocity amplitude for oscillatory cylinder rotation")
+    p.add_argument("--cylinder-rotation-frequency", type=float,
+                   default=cfg.get("cylinder_rotation_frequency", 0.0, float),
+                   help="Oscillation frequency for cylinder rotation")
+    p.add_argument("--cylinder-rotation-phase-deg", type=float,
+                   default=cfg.get("cylinder_rotation_phase_deg", 0.0, float),
+                   help="Phase offset in degrees for oscillatory cylinder rotation")
     p.add_argument("--plot",     type=str_to_bool, default=cfg.get("plot", False, bool),
                    help="Show matplotlib plots after simulation")
     p.add_argument("--plot-grid", type=str_to_bool,
@@ -311,8 +356,12 @@ def _expected_nonuniform_focus(args) -> tuple[float, float]:
 
 def _expected_nonuniform_band(args) -> tuple[float, float, float, float]:
     center_x, center_y = _expected_nonuniform_focus(args)
-    width_x = float(np.clip(args.band_fraction_x, 1e-3, 1.0)) * args.lx
-    width_y = float(np.clip(args.band_fraction_y, 1e-3, 1.0)) * args.ly
+    if args.nonuniform_mode == "center-uniform":
+        width_x = float(np.clip(args.uniform_fraction_x, 1e-3, 1.0)) * args.lx
+        width_y = float(np.clip(args.uniform_fraction_y, 1e-3, 1.0)) * args.ly
+    else:
+        width_x = float(np.clip(args.band_fraction_x, 1e-3, 1.0)) * args.lx
+        width_y = float(np.clip(args.band_fraction_y, 1e-3, 1.0)) * args.ly
     start_x = float(np.clip(center_x - 0.5 * width_x,
                     args.x_min, args.x_max - width_x))
     end_x = start_x + width_x
@@ -334,6 +383,16 @@ def _resolve_cylinder_geometry(args) -> tuple[float, float, float]:
     return cx, cy, radius
 
 
+def _cylinder_angular_velocity(args, time: float) -> float:
+    if str(args.cylinder_rotation_mode).strip().lower() != "oscillatory":
+        return 0.0
+    phase = np.deg2rad(float(args.cylinder_rotation_phase_deg))
+    return float(
+        args.cylinder_rotation_amplitude *
+        np.sin(2.0 * np.pi * args.cylinder_rotation_frequency * time + phase)
+    )
+
+
 def _kinematic_viscosity(args, inflow_u: float, cylinder_radius: float | None) -> float:
     if args.cylinder and args.re_is_cylinder_based and cylinder_radius is not None:
         return inflow_u * (2.0 * cylinder_radius) / args.re
@@ -350,6 +409,7 @@ def _snapshot_metadata(args, solver) -> dict:
         "re": args.re,
         "ibm_force_x": solver.last_ibm_force_x,
         "ibm_force_y": solver.last_ibm_force_y,
+        "cylinder_omega": _cylinder_angular_velocity(args, solver.t),
     }
 
 
@@ -388,24 +448,39 @@ def _grid_matches_args(metadata: dict, grid, args) -> bool:
 def _nonuniform_metadata_matches_args(metadata: dict, args) -> bool:
     # Only accept nonuniform files that were built with the expected mode and parameters.
     mode = str(metadata.get("nonuniform_mode", "")).strip().lower()
-    if mode != "center-band":
+    if mode != args.nonuniform_mode:
         return False
 
     focus_x, focus_y = _expected_nonuniform_focus(args)
     band_start_x, band_end_x, band_start_y, band_end_y = _expected_nonuniform_band(
         args)
-    return (
+    common_matches = (
         np.isclose(float(metadata.get("beta_x", np.nan)), float(args.beta_x)) and
         np.isclose(float(metadata.get("beta_y", np.nan)), float(args.beta_y)) and
         np.isclose(float(metadata.get("focus_x", np.nan)), float(focus_x)) and
         np.isclose(float(metadata.get("focus_y", np.nan)), float(focus_y)) and
-        np.isclose(float(metadata.get("band_fraction_x", np.nan)), float(args.band_fraction_x)) and
-        np.isclose(float(metadata.get("band_fraction_y", np.nan)), float(args.band_fraction_y)) and
         np.isclose(float(metadata.get("band_start_x", np.nan)), float(band_start_x)) and
         np.isclose(float(metadata.get("band_end_x", np.nan)), float(band_end_x)) and
         np.isclose(float(metadata.get("band_start_y", np.nan)), float(band_start_y)) and
         np.isclose(float(metadata.get("band_end_y", np.nan)),
                    float(band_end_y))
+    )
+    if not common_matches:
+        return False
+
+    if mode == "center-uniform":
+        return (
+            np.isclose(float(metadata.get("uniform_fraction_x", np.nan)),
+                       float(args.uniform_fraction_x)) and
+            np.isclose(float(metadata.get("uniform_fraction_y", np.nan)),
+                       float(args.uniform_fraction_y))
+        )
+
+    return (
+        np.isclose(float(metadata.get("band_fraction_x", np.nan)),
+                   float(args.band_fraction_x)) and
+        np.isclose(float(metadata.get("band_fraction_y", np.nan)),
+                   float(args.band_fraction_y))
     )
 
 
@@ -438,6 +513,9 @@ def prepare_nonuniform_grid(args):
         focus_y=focus_y,
         band_fraction_x=args.band_fraction_x,
         band_fraction_y=args.band_fraction_y,
+        nonuniform_mode=args.nonuniform_mode,
+        uniform_fraction_x=args.uniform_fraction_x,
+        uniform_fraction_y=args.uniform_fraction_y,
     )
     os.makedirs(args.outdir, exist_ok=True)
     save_grid_metadata_dict(_grid_metadata_path(args), metadata)
@@ -483,6 +561,8 @@ def run(args, grid=None, grid_loaded_from_file=False):
         print(f"  Config file   : {args.config}")
         print(f"  Grid          : {args.nx} x {args.ny}")
         print(f"  Grid type     : {args.grid_type}")
+        if args.grid_type == "nonuniform":
+            print(f"  Grid mode     : {args.nonuniform_mode}")
         print(
             "  Domain        : "
             f"x=[{args.x_min}, {args.x_max}] (Lx={args.lx}), "
@@ -532,9 +612,26 @@ def run(args, grid=None, grid_loaded_from_file=False):
     r = None
     if args.cylinder:
         cx, cy, r = _resolve_cylinder_geometry(args)
-        ibm.add_circle(cx, cy, r)
+        if args.cylinder_rotation_mode == "oscillatory":
+            ibm.add_rotating_circle(
+                cx,
+                cy,
+                r,
+                omega_amplitude=args.cylinder_rotation_amplitude,
+                frequency=args.cylinder_rotation_frequency,
+                phase=np.deg2rad(args.cylinder_rotation_phase_deg),
+            )
+        else:
+            ibm.add_circle(cx, cy, r)
         if is_root and args.verbose:
             print(f"  IBM cylinder: centre=({cx:.2f},{cy:.2f}), r={r:.4f}")
+            if args.cylinder_rotation_mode == "oscillatory":
+                print(
+                    "  Cylinder rot.: "
+                    f"omega(t)={args.cylinder_rotation_amplitude:.4g}"
+                    f"*sin(2*pi*{args.cylinder_rotation_frequency:.4g}*t + "
+                    f"{args.cylinder_rotation_phase_deg:.4g} deg)"
+                )
 
     # ------------------------------------------------------------------
     # Solver
@@ -648,6 +745,25 @@ def _plot_results(solver, grid, args):
     X, Y = np.meshgrid(grid.xc, grid.yc, indexing="ij")
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+
+    if args.cylinder:
+        from matplotlib.patches import Circle
+        cx, cy, radius = _resolve_cylinder_geometry(args)
+
+        # Draw the immersed cylinder on every panel so geometry alignment
+        # is visible in vorticity, pressure, and velocity plots.
+        for i, ax in enumerate(axes):
+            edge_color = "#111111" if i == 2 else "white"
+            ax.add_patch(
+                Circle(
+                    (cx, cy),
+                    radius,
+                    fill=False,
+                    ec=edge_color,
+                    lw=1.6,
+                    zorder=6,
+                )
+            )
 
     # Vorticity: use robust clipping + high-contrast diverging map
     # so coherent structures are easier to read.
@@ -828,7 +944,9 @@ def _plot_grid(grid, args):
         )
 
     fig.suptitle(
-        f"Grid type={args.grid_type}, nx={grid.nx}, ny={grid.ny}, "
+        f"Grid type={args.grid_type}"
+        f"{', mode=' + args.nonuniform_mode if args.grid_type == 'nonuniform' else ''}, "
+        f"nx={grid.nx}, ny={grid.ny}, "
         f"dx_min={grid.dx_min:.4g}, dy_min={grid.dy_min:.4g}"
     )
     fig.tight_layout()
@@ -848,34 +966,46 @@ def _run_auto_outputs(grid, args):
     need_aero_series = args.auto_generate_coeff_history or args.auto_generate_aero_report
     aero_series_path = os.path.join(results_dir, "aero.csv")
     aero_report_path = os.path.join(results_dir, "aero_report.txt")
+    aero_ready = False
 
     if need_aero_series:
-        status = run_aero_analysis(
-            indir=args.outdir,
-            pattern="snap_*.npz",
-            config=args.config,
-            u_ref=args.inflow_u,
-            use_cylinder_diameter=bool(
-                args.re_is_cylinder_based and args.cylinder),
-            t_min=args.auto_aero_t_min,
-            save_series=aero_series_path,
-            save_report=aero_report_path if args.auto_generate_aero_report else None,
-        )
-        if status != 0:
-            print("  Warning: automatic aerodynamic post-processing failed.")
-            return
-
-    if args.auto_generate_coeff_history:
-        coeff_history_name = "coeff_history.png"
         try:
-            plot_coeff_history(
-                aero_series_path,
-                save_name=coeff_history_name,
-                coeff_t_min=args.auto_coeff_t_min,
+            status = run_aero_analysis(
+                indir=args.outdir,
+                pattern="snap_*.npz",
+                config=args.config,
+                u_ref=args.inflow_u,
+                use_cylinder_diameter=bool(
+                    args.re_is_cylinder_based and args.cylinder),
+                t_min=args.auto_aero_t_min,
+                save_series=aero_series_path,
+                save_report=aero_report_path if args.auto_generate_aero_report else None,
             )
+            aero_ready = status == 0 and os.path.exists(aero_series_path)
+            if status != 0:
+                print("  Warning: automatic aerodynamic post-processing failed.")
         except Exception as exc:
             print(
-                f"  Warning: automatic coefficient-history plot failed: {exc}")
+                f"  Warning: automatic aerodynamic post-processing failed: {exc}"
+            )
+
+    if args.auto_generate_coeff_history:
+        if aero_ready:
+            coeff_history_name = "coeff_history.png"
+            try:
+                plot_coeff_history(
+                    aero_series_path,
+                    save_name=coeff_history_name,
+                    coeff_t_min=args.auto_coeff_t_min,
+                )
+            except Exception as exc:
+                print(
+                    f"  Warning: automatic coefficient-history plot failed: {exc}")
+        else:
+            print(
+                "  Warning: automatic coefficient-history plot skipped because "
+                "the aerodynamic series was not generated."
+            )
 
     latest_snapshot = None
     if args.auto_generate_velocity_u or args.auto_generate_velocity_v or args.auto_generate_ibm_forcing:
