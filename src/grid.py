@@ -322,6 +322,81 @@ def _allocate_piecewise_cells(
     return counts
 
 
+def _solve_geometric_ratio(n: int, first_width: float, total_length: float) -> float:
+    """Solve for geometric ratio r in sum(first_width * r**k, k=0..n-1)=total_length."""
+    if n <= 0:
+        return 1.0
+    if first_width <= 0.0:
+        return 1.0
+
+    target = float(total_length)
+    mean_match = n * first_width
+    if np.isclose(target, mean_match, rtol=1e-12, atol=1e-14):
+        return 1.0
+
+    def series_sum(r: float) -> float:
+        if np.isclose(r, 1.0, rtol=0.0, atol=1e-14):
+            return mean_match
+        return first_width * (r**n - 1.0) / (r - 1.0)
+
+    if target > mean_match:
+        lo, hi = 1.0, 2.0
+        while series_sum(hi) < target:
+            hi *= 2.0
+            if hi > 1e6:
+                break
+    else:
+        lo, hi = 1e-8, 1.0
+
+    for _ in range(120):
+        mid = 0.5 * (lo + hi)
+        if series_sum(mid) < target:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def _faces_from_core_edge(
+    n: int,
+    length: float,
+    core_edge_dx: float,
+    core_at_upper_end: bool,
+) -> np.ndarray:
+    """Create faces on [0, length] with cell width matched at the core edge."""
+    if n <= 0:
+        return np.asarray([0.0, length], dtype=float)
+    if length <= 0.0:
+        return np.linspace(0.0, length, n + 1)
+
+    ratio = _solve_geometric_ratio(n, core_edge_dx, length)
+    widths = core_edge_dx * (ratio ** np.arange(n, dtype=float))
+
+    if core_at_upper_end:
+        cumulative = np.concatenate(([0.0], np.cumsum(widths)))
+        faces = length - cumulative[::-1]
+    else:
+        faces = np.concatenate(([0.0], np.cumsum(widths)))
+
+    faces[0] = 0.0
+    faces[-1] = length
+    return faces
+
+
+def _resolve_center_uniform_interval(
+    length: float,
+    core_interval: tuple[float, float],
+) -> tuple[float, float]:
+    """Resolve [core_start, core_end] on [0, length] for center-uniform mode."""
+    core_start = float(core_interval[0])
+    core_end = float(core_interval[1])
+    core_start = float(np.clip(core_start, 0.0, length))
+    core_end = float(np.clip(core_end, 0.0, length))
+    if not core_end > core_start:
+        raise ValueError("core_interval must define a positive-width interval")
+    return core_start, core_end
+
+
 def stretched_faces_center_band(
     n: int,
     length: float,
@@ -413,8 +488,7 @@ def stretched_faces_center_uniform(
     n: int,
     length: float,
     beta: float,
-    center: float | None = None,
-    uniform_fraction: float = 1.0 / 3.0,
+    core_interval: tuple[float, float],
 ) -> tuple[np.ndarray, float, float]:
     """Faces with a uniform central band and stretched outer regions.
 
@@ -427,17 +501,10 @@ def stretched_faces_center_uniform(
     if length <= 0.0:
         raise ValueError("length must be positive")
 
-    frac = float(np.clip(uniform_fraction, 1e-3, 1.0))
-    core_width = frac * length
-    half_width = 0.5 * core_width
-    eps = 1e-12 * max(1.0, length)
-
-    center_default = 0.5 * length if center is None else float(center)
-    center_clamped = float(
-        np.clip(center_default, half_width + eps, length - half_width - eps)
+    core_start, core_end = _resolve_center_uniform_interval(
+        length=length,
+        core_interval=core_interval,
     )
-    core_start = max(0.0, center_clamped - half_width)
-    core_end = min(length, center_clamped + half_width)
 
     segment_lengths = np.array(
         [core_start, core_end - core_start, length - core_end],
@@ -448,20 +515,41 @@ def stretched_faces_center_uniform(
     segment_counts = _allocate_piecewise_cells(
         n, segment_lengths, segment_weights)
 
+    core_n = int(segment_counts[1])
+    if (core_end - core_start) > 1e-14 and core_n <= 0:
+        donor = int(np.argmax(segment_lengths))
+        if segment_counts[donor] > 1:
+            segment_counts[donor] -= 1
+            segment_counts[1] += 1
+
     segments = []
 
     left_n = int(segment_counts[0])
-    if left_n > 0:
-        segments.append(_cluster_to_upper_end(left_n, core_start, beta))
-
     core_n = int(segment_counts[1])
+    right_n = int(segment_counts[2])
+    core_len = float(core_end - core_start)
+    core_dx = core_len / max(core_n, 1)
+
+    if left_n > 0:
+        segments.append(
+            _faces_from_core_edge(
+                left_n, core_start, core_edge_dx=core_dx, core_at_upper_end=True
+            )
+        )
+
     if core_n > 0:
         segments.append(np.linspace(core_start, core_end, core_n + 1))
 
-    right_n = int(segment_counts[2])
     if right_n > 0:
-        segments.append(core_end + _cluster_to_lower_end(
-            right_n, length - core_end, beta))
+        segments.append(
+            core_end
+            + _faces_from_core_edge(
+                right_n,
+                length - core_end,
+                core_edge_dx=core_dx,
+                core_at_upper_end=False,
+            )
+        )
 
     if segments:
         faces = np.concatenate([segments[0]] + [segment[1:]
@@ -488,8 +576,10 @@ def build_nonuniform_grid_metadata(
     band_fraction_x: float = 1.0 / 3.0,
     band_fraction_y: float = 1.0 / 3.0,
     nonuniform_mode: str = "center-band",
-    uniform_fraction_x: float = 1.0 / 3.0,
-    uniform_fraction_y: float = 1.0 / 3.0,
+    uniform_x_start: float | None = None,
+    uniform_x_end: float | None = None,
+    uniform_y_start: float | None = None,
+    uniform_y_end: float | None = None,
 ) -> dict:
     """Build serializable metadata for a 2-D non-uniform Cartesian grid.
 
@@ -501,6 +591,8 @@ def build_nonuniform_grid_metadata(
     mode = str(nonuniform_mode).strip().lower()
     center_x = x_min + 0.5 * lx if focus_x is None else float(focus_x)
     center_y = y_min + 0.5 * ly if focus_y is None else float(focus_y)
+    x_max = float(x_min + lx)
+    y_max = float(y_min + ly)
     center_local_x = center_x - float(x_min)
     center_local_y = center_y - float(y_min)
 
@@ -512,21 +604,79 @@ def build_nonuniform_grid_metadata(
             ny, ly, beta_y, center=center_local_y, band_fraction=band_fraction_y
         )
     elif mode == "center-uniform":
+        if uniform_x_start is None or uniform_x_end is None:
+            raise ValueError(
+                "center-uniform mode requires uniform_x_start and uniform_x_end"
+            )
+        x_interval = (
+            float(uniform_x_start) - float(x_min),
+            float(uniform_x_end) - float(x_min),
+        )
         xf, band_start_x, band_end_x = stretched_faces_center_uniform(
-            nx, lx, beta_x, center=center_local_x, uniform_fraction=uniform_fraction_x
+            nx,
+            lx,
+            beta_x,
+            core_interval=x_interval,
         )
-        yf, band_start_y, band_end_y = stretched_faces_center_uniform(
-            ny, ly, beta_y, center=center_local_y, uniform_fraction=uniform_fraction_y
-        )
+
+        mirrored_y = y_min < 0.0 < y_max
+        if mirrored_y:
+            if not np.isclose(y_min + y_max, 0.0, atol=1e-10, rtol=0.0):
+                raise ValueError(
+                    "center-uniform mirrored y-spacing requires y-domain symmetric about 0"
+                )
+            if ny % 2 != 0:
+                raise ValueError(
+                    "center-uniform mirrored y-spacing requires even ny"
+                )
+
+            if uniform_y_start is None or uniform_y_end is None:
+                raise ValueError(
+                    "center-uniform mode requires uniform_y_start and uniform_y_end"
+                )
+            y0 = float(uniform_y_start)
+            y1 = float(uniform_y_end)
+            if not (y0 < 0.0 < y1 and np.isclose(abs(y0), abs(y1), atol=1e-10, rtol=0.0)):
+                raise ValueError(
+                    "uniform_y_start/uniform_y_end must be symmetric around 0 (e.g. -a, a)"
+                )
+            y_core_interval = (0.0, abs(y1))
+
+            upper_faces, y_core_start_local, y_core_end_local = stretched_faces_center_uniform(
+                ny // 2,
+                y_max,
+                beta_y,
+                core_interval=y_core_interval,
+            )
+            yf = np.concatenate((-upper_faces[::-1], upper_faces[1:]))
+            band_start_y = -y_core_end_local
+            band_end_y = y_core_end_local
+        else:
+            if uniform_y_start is None or uniform_y_end is None:
+                raise ValueError(
+                    "center-uniform mode requires uniform_y_start and uniform_y_end"
+                )
+            y_interval = (
+                float(uniform_y_start) - float(y_min),
+                float(uniform_y_end) - float(y_min),
+            )
+            yf, band_start_y, band_end_y = stretched_faces_center_uniform(
+                ny,
+                ly,
+                beta_y,
+                core_interval=y_interval,
+            )
     else:
         raise ValueError(f"Unsupported nonuniform_mode '{nonuniform_mode}'")
 
     xf = xf + float(x_min)
-    yf = yf + float(y_min)
+    if mode != "center-uniform" or not (y_min < 0.0 < y_max):
+        yf = yf + float(y_min)
     band_start_x += float(x_min)
     band_end_x += float(x_min)
-    band_start_y += float(y_min)
-    band_end_y += float(y_min)
+    if mode != "center-uniform" or not (y_min < 0.0 < y_max):
+        band_start_y += float(y_min)
+        band_end_y += float(y_min)
 
     grid = CartesianGrid(nx=nx, ny=ny, lx=lx, ly=ly,
                          x_min=x_min, y_min=y_min, xf=xf, yf=yf)
@@ -539,8 +689,14 @@ def build_nonuniform_grid_metadata(
     metadata["focus_y"] = float(center_y)
     metadata["band_fraction_x"] = float(band_fraction_x)
     metadata["band_fraction_y"] = float(band_fraction_y)
-    metadata["uniform_fraction_x"] = float(uniform_fraction_x)
-    metadata["uniform_fraction_y"] = float(uniform_fraction_y)
+    metadata["uniform_x_start"] = np.nan if uniform_x_start is None else float(
+        uniform_x_start)
+    metadata["uniform_x_end"] = np.nan if uniform_x_end is None else float(
+        uniform_x_end)
+    metadata["uniform_y_start"] = np.nan if uniform_y_start is None else float(
+        uniform_y_start)
+    metadata["uniform_y_end"] = np.nan if uniform_y_end is None else float(
+        uniform_y_end)
     metadata["band_start_x"] = float(band_start_x)
     metadata["band_end_x"] = float(band_end_x)
     metadata["band_start_y"] = float(band_start_y)

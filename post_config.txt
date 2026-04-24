@@ -4,8 +4,6 @@
 # Grid visualization
 plot_grid = true
 auto_generate_grid_spacing = true
-auto_generate_velocity_u = false
-auto_generate_velocity_v = false
 auto_generate_ibm_forcing = true
 
 # Aerodynamic outputs

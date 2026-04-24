@@ -57,8 +57,10 @@ grid_beta_y = 2.0
 grid_band_fraction_x = 0.333333
 grid_band_fraction_y = 0.333333
 # Used by center-uniform mode
-grid_uniform_fraction_x = 0.50
-grid_uniform_fraction_y = 0.50
+grid_uniform_x_start = 6.0
+grid_uniform_x_end = 10.0
+grid_uniform_y_start = 3.5
+grid_uniform_y_end = 6.5
 
 # Optional legacy compatibility keys still exist in the parser, but the
 # unified keys above are the recommended way to configure new runs.

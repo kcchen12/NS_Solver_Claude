@@ -11,7 +11,8 @@ from src.io_utils import save_grid_metadata, save_grid_metadata_dict
 
 
 def _normalize_nonuniform_mode(raw_value: str | None) -> str:
-    value = "center-band" if raw_value is None else str(raw_value).strip().lower()
+    value = "center-band" if raw_value is None else str(
+        raw_value).strip().lower()
     return value if value in {"center-band", "center-uniform"} else "center-band"
 
 
@@ -52,10 +53,10 @@ def parse_args() -> argparse.Namespace:
     )
     band_fraction_x_default = cfg.get("grid_band_fraction_x", 1.0 / 3.0, float)
     band_fraction_y_default = cfg.get("grid_band_fraction_y", 1.0 / 3.0, float)
-    uniform_fraction_x_default = cfg.get(
-        "grid_uniform_fraction_x", 1.0 / 3.0, float)
-    uniform_fraction_y_default = cfg.get(
-        "grid_uniform_fraction_y", 1.0 / 3.0, float)
+    uniform_x_start_default = cfg.get("grid_uniform_x_start", None, float)
+    uniform_x_end_default = cfg.get("grid_uniform_x_end", None, float)
+    uniform_y_start_default = cfg.get("grid_uniform_y_start", None, float)
+    uniform_y_end_default = cfg.get("grid_uniform_y_end", None, float)
 
     p = argparse.ArgumentParser(
         description="Pre-generate prepared grid metadata for post-processing and setup",
@@ -116,16 +117,28 @@ def parse_args() -> argparse.Namespace:
         help="Fraction of the y-domain width refined in the center-band mode",
     )
     p.add_argument(
-        "--uniform-fraction-x",
+        "--uniform-x-start",
         type=float,
-        default=uniform_fraction_x_default,
-        help="Fraction of the x-domain kept uniform in the center-uniform mode",
+        default=uniform_x_start_default,
+        help="Absolute x-start of the uniform core for center-uniform mode",
     )
     p.add_argument(
-        "--uniform-fraction-y",
+        "--uniform-x-end",
         type=float,
-        default=uniform_fraction_y_default,
-        help="Fraction of the y-domain kept uniform in the center-uniform mode",
+        default=uniform_x_end_default,
+        help="Absolute x-end of the uniform core for center-uniform mode",
+    )
+    p.add_argument(
+        "--uniform-y-start",
+        type=float,
+        default=uniform_y_start_default,
+        help="Absolute y-start of the uniform core for center-uniform mode (use -a)",
+    )
+    p.add_argument(
+        "--uniform-y-end",
+        type=float,
+        default=uniform_y_end_default,
+        help="Absolute y-end of the uniform core for center-uniform mode (use +a)",
     )
     p.add_argument(
         "--focus-x",
@@ -163,6 +176,14 @@ def parse_args() -> argparse.Namespace:
         p.error("Require x_max > x_min")
     if not args.y_max > args.y_min:
         p.error("Require y_max > y_min")
+    if (args.uniform_x_start is None) != (args.uniform_x_end is None):
+        p.error("Provide both --uniform-x-start and --uniform-x-end, or neither")
+    if (args.uniform_y_start is None) != (args.uniform_y_end is None):
+        p.error("Provide both --uniform-y-start and --uniform-y-end, or neither")
+    if args.nonuniform_mode == "center-uniform":
+        if args.uniform_x_start is None or args.uniform_y_start is None:
+            p.error(
+                "center-uniform mode requires explicit --uniform-x-* and --uniform-y-* bounds")
 
     args.lx = float(args.x_max - args.x_min)
     args.ly = float(args.y_max - args.y_min)
@@ -206,8 +227,10 @@ if __name__ == "__main__":
             band_fraction_x=args.band_fraction_x,
             band_fraction_y=args.band_fraction_y,
             nonuniform_mode=args.nonuniform_mode,
-            uniform_fraction_x=args.uniform_fraction_x,
-            uniform_fraction_y=args.uniform_fraction_y,
+            uniform_x_start=args.uniform_x_start,
+            uniform_x_end=args.uniform_x_end,
+            uniform_y_start=args.uniform_y_start,
+            uniform_y_end=args.uniform_y_end,
         )
         save_grid_metadata_dict(output_path, metadata)
         print(
@@ -216,6 +239,7 @@ if __name__ == "__main__":
             f"beta_x={args.beta_x}, beta_y={args.beta_y}, "
             f"mode={args.nonuniform_mode}, "
             f"band_fraction_x={args.band_fraction_x}, band_fraction_y={args.band_fraction_y}, "
-            f"uniform_fraction_x={args.uniform_fraction_x}, uniform_fraction_y={args.uniform_fraction_y}, "
+            f"uniform_x=[{args.uniform_x_start}, {args.uniform_x_end}], "
+            f"uniform_y=[{args.uniform_y_start}, {args.uniform_y_end}], "
             f"center=({focus_x}, {focus_y})"
         )

@@ -384,6 +384,35 @@ def _load_ibm_cell_forcing(file_path: str) -> tuple[np.ndarray, np.ndarray]:
         )
 
 
+def _load_grid_faces_for_snapshot(
+    file_path: str,
+    nx: int,
+    ny: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load physical grid faces from prepared-grid metadata when available."""
+    indir = os.path.dirname(os.path.abspath(file_path))
+    candidates = [
+        os.path.join(indir, "nonuniform_grid.npz"),
+        os.path.join(indir, "uniform_grid.npz"),
+    ]
+
+    for grid_path in candidates:
+        if not os.path.exists(grid_path):
+            continue
+        try:
+            with np.load(grid_path, allow_pickle=False) as meta:
+                if "xf" in meta and "yf" in meta:
+                    xf = np.asarray(meta["xf"], dtype=float)
+                    yf = np.asarray(meta["yf"], dtype=float)
+                    if xf.shape == (nx + 1,) and yf.shape == (ny + 1,):
+                        return xf, yf
+        except Exception:
+            continue
+
+    # Fallback to index-like coordinates if no prepared grid metadata is found.
+    return np.arange(nx + 1, dtype=float), np.arange(ny + 1, dtype=float)
+
+
 def plot_ibm_forcing(
     file_path: str,
     save_name: Optional[str] = None,
@@ -394,33 +423,58 @@ def plot_ibm_forcing(
 
     fx, fy = _load_ibm_cell_forcing(file_path)
     fmag = np.sqrt(fx**2 + fy**2)
+    nx, ny = fx.shape
+    xf, yf = _load_grid_faces_for_snapshot(file_path, nx=nx, ny=ny)
+
+    Xf, Yf = np.meshgrid(xf, yf, indexing="ij")
 
     vmax_comp = max(float(np.percentile(
         np.abs(np.concatenate([fx.ravel(), fy.ravel()])), 99.0)), 1e-12)
     vmax_mag = max(float(np.percentile(fmag, 99.0)), 1e-12)
 
+    active_threshold = max(1e-12, 0.01 * float(np.max(fmag)))
+    active = fmag >= active_threshold
+
+    if np.any(active):
+        ii, jj = np.where(active)
+        pad_cells = 3
+        i0 = max(int(np.min(ii)) - pad_cells, 0)
+        i1 = min(int(np.max(ii)) + pad_cells, nx - 1)
+        j0 = max(int(np.min(jj)) - pad_cells, 0)
+        j1 = min(int(np.max(jj)) + pad_cells, ny - 1)
+        xlim = (float(xf[i0]), float(xf[i1 + 1]))
+        ylim = (float(yf[j0]), float(yf[j1 + 1]))
+    else:
+        xlim = (float(xf[0]), float(xf[-1]))
+        ylim = (float(yf[0]), float(yf[-1]))
+
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.5))
 
-    im0 = axes[0].imshow(fx, origin="lower", cmap="seismic",
-                         vmin=-vmax_comp, vmax=vmax_comp)
+    im0 = axes[0].pcolormesh(Xf, Yf, fx, shading="flat", cmap="seismic",
+                             vmin=-vmax_comp, vmax=vmax_comp)
     axes[0].set_title("IBM Forcing x (cell)", fontsize=11, fontweight="bold")
     axes[0].set_xlabel("x")
     axes[0].set_ylabel("y")
     fig.colorbar(im0, ax=axes[0])
 
-    im1 = axes[1].imshow(fy, origin="lower", cmap="seismic",
-                         vmin=-vmax_comp, vmax=vmax_comp)
+    im1 = axes[1].pcolormesh(Xf, Yf, fy, shading="flat", cmap="seismic",
+                             vmin=-vmax_comp, vmax=vmax_comp)
     axes[1].set_title("IBM Forcing y (cell)", fontsize=11, fontweight="bold")
     axes[1].set_xlabel("x")
     axes[1].set_ylabel("y")
     fig.colorbar(im1, ax=axes[1])
 
-    im2 = axes[2].imshow(fmag, origin="lower",
-                         cmap="inferno", vmin=0.0, vmax=vmax_mag)
+    im2 = axes[2].pcolormesh(Xf, Yf, fmag, shading="flat",
+                             cmap="inferno", vmin=0.0, vmax=vmax_mag)
     axes[2].set_title("IBM Forcing Magnitude", fontsize=11, fontweight="bold")
     axes[2].set_xlabel("x")
     axes[2].set_ylabel("y")
     fig.colorbar(im2, ax=axes[2])
+
+    for ax in axes:
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
+        ax.set_aspect("equal")
 
     fig.suptitle(
         f"IBM Forcing Fields: {os.path.basename(file_path)}", fontsize=12, fontweight="bold")

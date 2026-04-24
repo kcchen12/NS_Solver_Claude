@@ -3,17 +3,17 @@
 # Format: key = value
 
 # Grid parameters
-nx = 320
-ny = 128
+nx = 600
+ny = 240
 
 # Domain dimensions
 lx = 25.0
 ly = 10.0
 # Optional explicit domain bounds (if omitted, solver uses x:[0,lx], y:[0,ly])
 x_min = -10.0
-x_max = 15.0
-y_min = -5.0
-y_max = 5.0
+x_max = 30.0
+y_min = -10.0
+y_max = 10.0
 
 # Physics parameters
 re = 100.0
@@ -68,9 +68,10 @@ grid_band_fraction_x = 0.333333
 grid_band_fraction_y = 0.333333
 
 # Used only by center-uniform mode:
-# fraction of each domain direction kept uniform before the outer tanh stretch.
-grid_uniform_fraction_x = 0.50
-grid_uniform_fraction_y = 0.60
+grid_uniform_x_start = -2.0
+grid_uniform_x_end = 15.0
+grid_uniform_y_start = -5.0
+grid_uniform_y_end = 5.0
 # Legacy compatibility key still read by the parser
 runtime_nonuniform_mode = center-uniform
 
@@ -86,10 +87,10 @@ plot = true
 verbose = true
 
 # Cylinder rotation:
-#   stationary  -> fixed cylinder
+#   stationary  -> fixed_cylinder
 #   oscillatory -> back-and-forth sinusoidal angular velocity
-cylinder_rotation_mode = oscillatory
+cylinder_rotation_mode = fixed_cylinder
 # omega(t) = amplitude * sin(2*pi*frequency*t + phase)
 cylinder_rotation_amplitude = 2.0
-cylinder_rotation_frequency = 0.18
+cylinder_rotation_frequency = 0.12
 cylinder_rotation_phase_deg = 0.0

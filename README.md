@@ -85,7 +85,8 @@ Grid control:
 - `grid_nonuniform_mode`: `center-band` or `center-uniform`
 - `grid_beta_x`, `grid_beta_y`: tanh stretch strength / center-density strength in each direction
 - `grid_band_fraction_x`, `grid_band_fraction_y`: fraction of the domain refined around the center band in `center-band` mode
-- `grid_uniform_fraction_x`, `grid_uniform_fraction_y`: fraction of the domain kept uniform in the middle in `center-uniform` mode
+- `grid_uniform_x_start`, `grid_uniform_x_end`: explicit x-bounds of the uniform core in `center-uniform` mode
+- `grid_uniform_y_start`, `grid_uniform_y_end`: explicit y-bounds of the uniform core in `center-uniform` mode
 
 Boundary conditions:
 
@@ -102,8 +103,6 @@ Cylinder / immersed boundary:
 - `cylinder`
 - `cylinder_center_x`, `cylinder_center_y`
 - `cylinder_radius`
-- `cylinder_rotation_mode`: `stationary` or `oscillatory`
-- `cylinder_rotation_amplitude`, `cylinder_rotation_frequency`, `cylinder_rotation_phase_deg`
 - `re_is_cylinder_based`
 
 Initialization and runtime plotting:
@@ -116,10 +115,9 @@ Initialization and runtime plotting:
 
 - `plot_grid`: save the grid-spacing/concentration figure
 - `auto_generate_grid_spacing`: automatically generate `results/grid.png`
-- `auto_generate_velocity_u`: automatically generate `results/velocity_u.png`
-- `auto_generate_velocity_v`: automatically generate `results/velocity_v.png`
 - `auto_generate_coeff_history`: automatically generate `results/coeff_history.png`
 - `auto_generate_aero_report`: automatically generate `results/aero_report.txt`
+- `auto_generate_ibm_forcing`: automatically generate `results/ibm_forcing.png` from the latest snapshot
 - `auto_coeff_t_min`: minimum time for automatic coefficient-history plotting
 - `auto_aero_t_min`: minimum time for automatic aerodynamic analysis
 
@@ -144,47 +142,18 @@ This does not permanently change the configured boundary condition values. It on
 
 ### Nonuniform Grid
 
-Two nonuniform modes are available:
+The current nonuniform grid is a center-band refinement, not a boundary-layer stretch.
 
-- `center-band`: spacing stays near uniform outside a central band, then decreases smoothly toward the band center
-- `center-uniform`: spacing stays constant inside a central rectangular core, while the outer regions stretch gradually toward the boundaries using tanh mappings
-
-In both modes:
-
-- `beta_x` and `beta_y` control the strength of the gradual spacing change
-- the nonuniform region is centered on `cylinder_center_x/y` when provided, otherwise on the domain midpoint
+- Outside the refined band, spacing stays close to normal uniform spacing
+- Inside the band, cell density increases smoothly toward the middle
+- `beta_x` and `beta_y` control how much denser the middle becomes
+- `band_fraction_x` and `band_fraction_y` control how wide that refined middle region is
+- Example: band_faction _x = 0.333333 refines the middle third.
 
 Prepared grid metadata is saved automatically into `outdir` as either:
 
 - `uniform_grid.npz`
 - `nonuniform_grid.npz`
-
-### Oscillating Cylinder
-
-The immersed cylinder can optionally rotate back and forth with a sinusoidal
-angular velocity:
-
-```text
-omega(t) = A * sin(2*pi*f*t + phi)
-```
-
-where:
-
-- `A = cylinder_rotation_amplitude`
-- `f = cylinder_rotation_frequency`
-- `phi = cylinder_rotation_phase_deg` converted to radians
-
-Enable it in `config.txt` with:
-
-```text
-cylinder_rotation_mode = oscillatory
-cylinder_rotation_amplitude = 2.0
-cylinder_rotation_frequency = 0.5
-cylinder_rotation_phase_deg = 0.0
-```
-
-The solver then imposes tangential wall velocity on the cylinder surface
-through the immersed-boundary forcing rather than keeping the body stationary.
 
 ## Prepared Grid Generation
 
@@ -197,17 +166,15 @@ python pre_generate_grid.py
 Generate a nonuniform prepared grid:
 
 ```bash
-python pre_generate_grid.py --grid-type nonuniform --nonuniform-mode center-uniform --beta-x 2.5 --beta-y 2.0 --uniform-fraction-x 0.5 --uniform-fraction-y 0.6
+python pre_generate_grid.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0 --band-fraction-x 0.33 --band-fraction-y 0.33
 ```
 
 Common options:
 
 - `--nx`, `--ny`, `--lx`, `--ly`
 - `--grid-type uniform|nonuniform`
-- `--nonuniform-mode center-band|center-uniform`
 - `--beta-x`, `--beta-y`
 - `--band-fraction-x`, `--band-fraction-y`
-- `--uniform-fraction-x`, `--uniform-fraction-y`
 - `--focus-x`, `--focus-y`
 - `--outdir`
 - `--output-name`
@@ -241,20 +208,6 @@ This produces `results/grid.png` with:
 - point concentration / cell density
 - spacing curves
 
-### Velocity Snapshots
-
-Enable in [post_config.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/post_config.txt):
-
-```text
-auto_generate_velocity_u = true
-auto_generate_velocity_v = true
-```
-
-These use the existing snapshot-viewer plotting path and save:
-
-- `results/velocity_u.png`
-- `results/velocity_v.png`
-
 ### Coefficient History Plot
 
 Generate it manually from the viewer:
@@ -269,6 +222,20 @@ Useful viewer options:
 - `--coeff-indir`
 - `--coeff-t-min`
 - `--save`
+
+### IBM Forcing Plot
+
+Generate a one-command IBM forcing visualization (x-component, y-component, magnitude):
+
+```bash
+python view_snapshot_viewer.py --plot-ibm --save ibm_forcing.png
+```
+
+Or for a specific snapshot:
+
+```bash
+python view_snapshot_viewer.py output/snap_005.0000.npz --plot-ibm --save ibm_forcing.png
+```
 
 ### Aerodynamic Analysis
 
@@ -320,6 +287,6 @@ Useful viewer options:
 
 ## Notes
 
-- The repo uses the split-config workflow: runtime settings in [config.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/config.txt) and derived-output controls in [post_config.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/post_config.txt)
+- The README now reflects the current split-config workflow
 - There is no `evaluate_strouhal.py` in this repo; use [analyze_aerodynamics.py](/Users/Carolyn/Desktop/NS_Solver_Claude/analyze_aerodynamics.py) for current frequency/report analysis
-- The current code and examples match the tested solver and post-processing paths in this repository
+- The local Python environment on this machine currently appears broken, so documentation changes were updated against the code but not executed end-to-end from this shell

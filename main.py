@@ -55,7 +55,7 @@ from src.io_utils import (
 from src.parallel import ParallelDecomposition
 from src.config import ConfigParser
 from analyze_aerodynamics import run_analysis as run_aero_analysis
-from view_snapshot_viewer import find_latest_snapshot, plot_coeff_history, plot_snapshot_key
+from view_snapshot_viewer import find_latest_snapshot, plot_coeff_history
 from view_snapshot_viewer import plot_ibm_forcing
 
 
@@ -76,12 +76,14 @@ def _normalize_bc_type(raw_value: str, default: str) -> str:
 
 
 def _normalize_nonuniform_mode(raw_value: str | None) -> str:
-    value = "center-band" if raw_value is None else str(raw_value).strip().lower()
+    value = "center-band" if raw_value is None else str(
+        raw_value).strip().lower()
     return value if value in {"center-band", "center-uniform"} else "center-band"
 
 
 def _normalize_cylinder_rotation_mode(raw_value: str | None) -> str:
-    value = "stationary" if raw_value is None else str(raw_value).strip().lower()
+    value = "stationary" if raw_value is None else str(
+        raw_value).strip().lower()
     return value if value in {"stationary", "oscillatory"} else "stationary"
 
 
@@ -154,10 +156,10 @@ def parse_args():
     )
     band_fraction_x_default = cfg.get("grid_band_fraction_x", 1.0 / 3.0, float)
     band_fraction_y_default = cfg.get("grid_band_fraction_y", 1.0 / 3.0, float)
-    uniform_fraction_x_default = cfg.get(
-        "grid_uniform_fraction_x", 1.0 / 3.0, float)
-    uniform_fraction_y_default = cfg.get(
-        "grid_uniform_fraction_y", 1.0 / 3.0, float)
+    uniform_x_start_default = cfg.get("grid_uniform_x_start", None, float)
+    uniform_x_end_default = cfg.get("grid_uniform_x_end", None, float)
+    uniform_y_start_default = cfg.get("grid_uniform_y_start", None, float)
+    uniform_y_end_default = cfg.get("grid_uniform_y_end", None, float)
 
     # Now parse all arguments with defaults from config file
     p = argparse.ArgumentParser(description="2-D Navier-Stokes solver")
@@ -207,12 +209,18 @@ def parse_args():
     p.add_argument("--band-fraction-y", type=float,
                    default=band_fraction_y_default,
                    help="Fraction of the y-domain width refined in the center-band mode")
-    p.add_argument("--uniform-fraction-x", type=float,
-                   default=uniform_fraction_x_default,
-                   help="Fraction of the x-domain kept uniform in the center-uniform mode")
-    p.add_argument("--uniform-fraction-y", type=float,
-                   default=uniform_fraction_y_default,
-                   help="Fraction of the y-domain kept uniform in the center-uniform mode")
+    p.add_argument("--uniform-x-start", type=float,
+                   default=uniform_x_start_default,
+                   help="Absolute x-start of the uniform core for center-uniform mode")
+    p.add_argument("--uniform-x-end", type=float,
+                   default=uniform_x_end_default,
+                   help="Absolute x-end of the uniform core for center-uniform mode")
+    p.add_argument("--uniform-y-start", type=float,
+                   default=uniform_y_start_default,
+                   help="Absolute y-start of the uniform core for center-uniform mode (use -a)")
+    p.add_argument("--uniform-y-end", type=float,
+                   default=uniform_y_end_default,
+                   help="Absolute y-end of the uniform core for center-uniform mode (use +a)")
     p.add_argument("--cylinder", type=str_to_bool, default=cfg.get("cylinder", False, bool),
                    help="Add an immersed-boundary cylinder at the domain centre")
     p.add_argument("--cylinder-radius", type=float,
@@ -258,14 +266,6 @@ def parse_args():
                    default=post_cfg.get(
                        "auto_generate_aero_report", False, bool),
                    help="Automatically save the aerodynamic report after the run")
-    p.add_argument("--auto-generate-velocity-u", type=str_to_bool,
-                   default=post_cfg.get(
-                       "auto_generate_velocity_u", False, bool),
-                   help="Automatically save a plot of the latest u-velocity snapshot")
-    p.add_argument("--auto-generate-velocity-v", type=str_to_bool,
-                   default=post_cfg.get(
-                       "auto_generate_velocity_v", False, bool),
-                   help="Automatically save a plot of the latest v-velocity snapshot")
     p.add_argument("--auto-generate-ibm-forcing", type=str_to_bool,
                    default=post_cfg.get(
                        "auto_generate_ibm_forcing", False, bool),
@@ -337,6 +337,14 @@ def parse_args():
         p.error("Require x_max > x_min")
     if not args.y_max > args.y_min:
         p.error("Require y_max > y_min")
+    if (args.uniform_x_start is None) != (args.uniform_x_end is None):
+        p.error("Provide both --uniform-x-start and --uniform-x-end, or neither")
+    if (args.uniform_y_start is None) != (args.uniform_y_end is None):
+        p.error("Provide both --uniform-y-start and --uniform-y-end, or neither")
+    if args.nonuniform_mode == "center-uniform":
+        if args.uniform_x_start is None or args.uniform_y_start is None:
+            p.error(
+                "center-uniform mode requires explicit --uniform-x-* and --uniform-y-* bounds")
 
     args.lx = float(args.x_max - args.x_min)
     args.ly = float(args.y_max - args.y_min)
@@ -357,17 +365,24 @@ def _expected_nonuniform_focus(args) -> tuple[float, float]:
 def _expected_nonuniform_band(args) -> tuple[float, float, float, float]:
     center_x, center_y = _expected_nonuniform_focus(args)
     if args.nonuniform_mode == "center-uniform":
-        width_x = float(np.clip(args.uniform_fraction_x, 1e-3, 1.0)) * args.lx
-        width_y = float(np.clip(args.uniform_fraction_y, 1e-3, 1.0)) * args.ly
+        start_x = float(np.clip(args.uniform_x_start, args.x_min, args.x_max))
+        end_x = float(np.clip(args.uniform_x_end, args.x_min, args.x_max))
+        if end_x <= start_x:
+            raise ValueError(
+                "uniform_x_end must be greater than uniform_x_start")
+
+        start_y = float(args.uniform_y_start)
+        end_y = float(args.uniform_y_end)
+        return start_x, end_x, start_y, end_y
     else:
         width_x = float(np.clip(args.band_fraction_x, 1e-3, 1.0)) * args.lx
         width_y = float(np.clip(args.band_fraction_y, 1e-3, 1.0)) * args.ly
-    start_x = float(np.clip(center_x - 0.5 * width_x,
-                    args.x_min, args.x_max - width_x))
-    end_x = start_x + width_x
-    start_y = float(np.clip(center_y - 0.5 * width_y,
-                    args.y_min, args.y_max - width_y))
-    end_y = start_y + width_y
+        start_x = float(np.clip(center_x - 0.5 * width_x,
+                        args.x_min, args.x_max - width_x))
+        end_x = start_x + width_x
+        start_y = float(np.clip(center_y - 0.5 * width_y,
+                        args.y_min, args.y_max - width_y))
+        end_y = start_y + width_y
     return start_x, end_x, start_y, end_y
 
 
@@ -468,13 +483,32 @@ def _nonuniform_metadata_matches_args(metadata: dict, args) -> bool:
     if not common_matches:
         return False
 
+    def _both_nan_or_close(a: float, b: float) -> bool:
+        return (np.isnan(a) and np.isnan(b)) or np.isclose(a, b)
+
     if mode == "center-uniform":
-        return (
-            np.isclose(float(metadata.get("uniform_fraction_x", np.nan)),
-                       float(args.uniform_fraction_x)) and
-            np.isclose(float(metadata.get("uniform_fraction_y", np.nan)),
-                       float(args.uniform_fraction_y))
+        meta_uniform_x_start = metadata.get("uniform_x_start", np.nan)
+        meta_uniform_x_end = metadata.get("uniform_x_end", np.nan)
+        meta_uniform_y_start = metadata.get("uniform_y_start", np.nan)
+        meta_uniform_y_end = metadata.get("uniform_y_end", np.nan)
+
+        expected_uniform_x_start = np.nan if args.uniform_x_start is None else float(
+            args.uniform_x_start)
+        expected_uniform_x_end = np.nan if args.uniform_x_end is None else float(
+            args.uniform_x_end)
+        expected_uniform_y_start = np.nan if args.uniform_y_start is None else float(
+            args.uniform_y_start)
+        expected_uniform_y_end = np.nan if args.uniform_y_end is None else float(
+            args.uniform_y_end)
+
+        interval_matches = (
+            _both_nan_or_close(float(meta_uniform_x_start), expected_uniform_x_start) and
+            _both_nan_or_close(float(meta_uniform_x_end), expected_uniform_x_end) and
+            _both_nan_or_close(float(meta_uniform_y_start), expected_uniform_y_start) and
+            _both_nan_or_close(float(meta_uniform_y_end),
+                               expected_uniform_y_end)
         )
+        return interval_matches
 
     return (
         np.isclose(float(metadata.get("band_fraction_x", np.nan)),
@@ -514,8 +548,10 @@ def prepare_nonuniform_grid(args):
         band_fraction_x=args.band_fraction_x,
         band_fraction_y=args.band_fraction_y,
         nonuniform_mode=args.nonuniform_mode,
-        uniform_fraction_x=args.uniform_fraction_x,
-        uniform_fraction_y=args.uniform_fraction_y,
+        uniform_x_start=args.uniform_x_start,
+        uniform_x_end=args.uniform_x_end,
+        uniform_y_start=args.uniform_y_start,
+        uniform_y_end=args.uniform_y_end,
     )
     os.makedirs(args.outdir, exist_ok=True)
     save_grid_metadata_dict(_grid_metadata_path(args), metadata)
@@ -734,7 +770,6 @@ def _plot_results(solver, grid, args):
     # Interpolate to cell centres
     u_c = 0.5 * (solver.u[:-1, :] + solver.u[1:, :])
     v_c = 0.5 * (solver.v[:, :-1] + solver.v[:, 1:])
-    speed = np.sqrt(u_c**2 + v_c**2)
     # 2-D scalar vorticity: omega_z = dv/dx - du/dy
     edge_x = 2 if grid.nx >= 3 else 1
     edge_y = 2 if grid.ny >= 3 else 1
@@ -744,7 +779,7 @@ def _plot_results(solver, grid, args):
 
     X, Y = np.meshgrid(grid.xc, grid.yc, indexing="ij")
 
-    fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 
     if args.cylinder:
         from matplotlib.patches import Circle
@@ -752,8 +787,8 @@ def _plot_results(solver, grid, args):
 
         # Draw the immersed cylinder on every panel so geometry alignment
         # is visible in vorticity, pressure, and velocity plots.
-        for i, ax in enumerate(axes):
-            edge_color = "#111111" if i == 2 else "white"
+        for ax in axes:
+            edge_color = "white"
             ax.add_patch(
                 Circle(
                     (cx, cy),
@@ -785,35 +820,6 @@ def _plot_results(solver, grid, args):
     axes[1].set_xlabel("x")
     axes[1].set_ylabel("y")
     axes[1].set_aspect("equal")
-
-    # Velocity visualization. streamplot requires equally spaced coordinates,
-    # so fall back to a nonuniform-safe quiver overlay when needed.
-    if grid.is_uniform:
-        axes[2].streamplot(grid.xc, grid.yc,
-                           u_c.T, v_c.T,
-                           density=1.5, color=speed.T, cmap="plasma")
-        axes[2].set_title("Streamlines")
-    else:
-        Xf, Yf = np.meshgrid(grid.xf, grid.yf, indexing="ij")
-        im2 = axes[2].pcolormesh(Xf, Yf, speed, shading="flat", cmap="plasma")
-        fig.colorbar(im2, ax=axes[2])
-        stride_x = max(1, grid.nx // 24)
-        stride_y = max(1, grid.ny // 16)
-        axes[2].quiver(
-            X[::stride_x, ::stride_y],
-            Y[::stride_x, ::stride_y],
-            u_c[::stride_x, ::stride_y],
-            v_c[::stride_x, ::stride_y],
-            color="white",
-            pivot="mid",
-            scale_units="xy",
-            scale=None,
-            width=0.003,
-        )
-        axes[2].set_title("Velocity Magnitude + Direction")
-    axes[2].set_xlabel("x")
-    axes[2].set_ylabel("y")
-    axes[2].set_aspect("equal")
 
     fig.suptitle(f"Re={args.re:.0f},  t={solver.t:.3f}")
     fig.tight_layout()
@@ -1008,24 +1014,12 @@ def _run_auto_outputs(grid, args):
             )
 
     latest_snapshot = None
-    if args.auto_generate_velocity_u or args.auto_generate_velocity_v or args.auto_generate_ibm_forcing:
+    if args.auto_generate_ibm_forcing:
         latest_snapshot = find_latest_snapshot(dirpath=args.outdir)
         if latest_snapshot is None:
             print(
                 "  Warning: automatic snapshot plots skipped because no snapshots were found.")
             return
-
-    if args.auto_generate_velocity_u:
-        try:
-            plot_snapshot_key(latest_snapshot, "u", save_name="velocity_u.png")
-        except Exception as exc:
-            print(f"  Warning: automatic u-velocity plot failed: {exc}")
-
-    if args.auto_generate_velocity_v:
-        try:
-            plot_snapshot_key(latest_snapshot, "v", save_name="velocity_v.png")
-        except Exception as exc:
-            print(f"  Warning: automatic v-velocity plot failed: {exc}")
 
     if args.auto_generate_ibm_forcing:
         try:

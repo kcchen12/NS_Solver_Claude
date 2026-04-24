@@ -126,7 +126,7 @@ class TestPreparedNonuniformGrid:
 
     def test_center_uniform_has_uniform_core_and_tanh_outer_stretch(self):
         xf, core_start, core_end = stretched_faces_center_uniform(
-            80, 8.0, beta=2.0, uniform_fraction=0.5
+            80, 8.0, beta=2.0, core_interval=(2.0, 6.0)
         )
         dx = np.diff(xf)
         xc = 0.5 * (xf[:-1] + xf[1:])
@@ -135,7 +135,8 @@ class TestPreparedNonuniformGrid:
         right_mask = xc > core_end
 
         assert np.all(dx > 0.0)
-        assert np.allclose(dx[core_mask], dx[core_mask][0], rtol=1e-10, atol=1e-12)
+        assert np.allclose(dx[core_mask], dx[core_mask]
+                           [0], rtol=1e-10, atol=1e-12)
         assert dx[core_mask][0] < 8.0 / 80.0
         assert dx[left_mask][0] > dx[left_mask][-1]
         assert dx[right_mask][-1] > dx[right_mask][0]
@@ -160,7 +161,7 @@ class TestPreparedNonuniformGrid:
         assert np.isclose(meta["xf"][0], 0.0)
         assert np.isclose(meta["xf"][-1], 2.0)
 
-    def test_center_uniform_metadata_tracks_mode_and_core_fraction(self):
+    def test_center_uniform_metadata_tracks_mode_and_core_bounds(self):
         meta = build_nonuniform_grid_metadata(
             nx=80,
             ny=40,
@@ -169,8 +170,10 @@ class TestPreparedNonuniformGrid:
             beta_x=2.0,
             beta_y=1.5,
             nonuniform_mode="center-uniform",
-            uniform_fraction_x=0.5,
-            uniform_fraction_y=0.4,
+            uniform_x_start=2.0,
+            uniform_x_end=6.0,
+            uniform_y_start=1.2,
+            uniform_y_end=2.8,
         )
         dx = np.asarray(meta["dx"])
         dy = np.asarray(meta["dy"])
@@ -180,12 +183,87 @@ class TestPreparedNonuniformGrid:
         y_core_mask = (yc >= meta["band_start_y"]) & (yc <= meta["band_end_y"])
 
         assert meta["nonuniform_mode"] == "center-uniform"
-        assert np.isclose(meta["uniform_fraction_x"], 0.5)
-        assert np.isclose(meta["uniform_fraction_y"], 0.4)
-        assert np.allclose(dx[x_core_mask], dx[x_core_mask][0], rtol=1e-10, atol=1e-12)
-        assert np.allclose(dy[y_core_mask], dy[y_core_mask][0], rtol=1e-10, atol=1e-12)
+        assert np.isclose(meta["uniform_x_start"], 2.0)
+        assert np.isclose(meta["uniform_x_end"], 6.0)
+        assert np.isclose(meta["uniform_y_start"], 1.2)
+        assert np.isclose(meta["uniform_y_end"], 2.8)
+        assert np.allclose(dx[x_core_mask], dx[x_core_mask]
+                           [0], rtol=1e-10, atol=1e-12)
+        assert np.allclose(dy[y_core_mask], dy[y_core_mask]
+                           [0], rtol=1e-10, atol=1e-12)
         assert dx[x_core_mask][0] < 8.0 / 80.0
         assert dy[y_core_mask][0] < 4.0 / 40.0
+
+    def test_center_uniform_metadata_accepts_explicit_core_ranges(self):
+        meta = build_nonuniform_grid_metadata(
+            nx=160,
+            ny=128,
+            lx=25.0,
+            ly=80.0,
+            x_min=-10.0,
+            y_min=-40.0,
+            beta_x=2.0,
+            beta_y=2.0,
+            nonuniform_mode="center-uniform",
+            uniform_x_start=-2.0,
+            uniform_x_end=7.5,
+            uniform_y_start=-8.0,
+            uniform_y_end=8.0,
+        )
+        assert np.isclose(meta["band_start_x"], -2.0)
+        assert np.isclose(meta["band_end_x"], 7.5)
+        assert np.isclose(meta["band_start_y"], -8.0)
+        assert np.isclose(meta["band_end_y"], 8.0)
+
+    def test_center_uniform_y_is_symmetric_when_domain_crosses_zero(self):
+        meta = build_nonuniform_grid_metadata(
+            nx=80,
+            ny=128,
+            lx=8.0,
+            ly=80.0,
+            x_min=-1.0,
+            y_min=-40.0,
+            beta_x=2.0,
+            beta_y=2.0,
+            nonuniform_mode="center-uniform",
+            uniform_x_start=1.0,
+            uniform_x_end=4.0,
+            uniform_y_start=-16.0,
+            uniform_y_end=16.0,
+        )
+        yf = np.asarray(meta["yf"])
+        dy = np.asarray(meta["dy"])
+        assert np.allclose(yf, -yf[::-1], rtol=1e-12, atol=1e-12)
+        assert np.allclose(dy[: dy.size // 2], dy[::-1]
+                           [: dy.size // 2], rtol=1e-12, atol=1e-12)
+
+    def test_center_uniform_transition_is_continuous_at_core_edges(self):
+        meta = build_nonuniform_grid_metadata(
+            nx=200,
+            ny=80,
+            lx=25.0,
+            ly=80.0,
+            x_min=-10.0,
+            y_min=-40.0,
+            beta_x=2.0,
+            beta_y=2.0,
+            nonuniform_mode="center-uniform",
+            uniform_x_start=-2.0,
+            uniform_x_end=7.5,
+            uniform_y_start=-8.0,
+            uniform_y_end=8.0,
+        )
+        xc = np.asarray(meta["xc"])
+        dx = np.asarray(meta["dx"])
+        core_mask = (xc >= meta["band_start_x"]) & (xc <= meta["band_end_x"])
+        core_indices = np.flatnonzero(core_mask)
+        left_core = int(core_indices[0])
+        right_core = int(core_indices[-1])
+
+        assert left_core > 0
+        assert right_core < dx.size - 1
+        assert dx[left_core - 1] >= 0.98 * dx[left_core]
+        assert dx[right_core + 1] >= 0.98 * dx[right_core]
 
     def test_nonuniform_metadata_respects_custom_bounds(self):
         meta = build_nonuniform_grid_metadata(
