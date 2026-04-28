@@ -42,7 +42,7 @@ import os
 import numpy as np
 
 from src.grid import CartesianGrid, build_nonuniform_grid_metadata
-from src.boundary import BoundaryConfig, BCType
+from src.boundary import BoundaryConfig, BCType, FarfieldMode
 from src.solver import FractionalStepSolver
 from src.ibm import ImmersedBoundary
 from src.io_utils import (
@@ -56,7 +56,7 @@ from src.parallel import ParallelDecomposition
 from src.config import ConfigParser
 from analyze_aerodynamics import run_analysis as run_aero_analysis
 from view_snapshot_viewer import find_latest_snapshot, plot_coeff_history
-from view_snapshot_viewer import plot_ibm_forcing
+from view_snapshot_viewer import plot_ibm_forcing, plot_vorticity_video
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -81,10 +81,20 @@ def _normalize_nonuniform_mode(raw_value: str | None) -> str:
     return value if value in {"center-band", "center-uniform"} else "center-band"
 
 
+def _normalize_farfield_mode(raw_value: str | None) -> str:
+    value = FarfieldMode.DIRICHLET if raw_value is None else str(raw_value).strip().lower()
+    return value if value in {FarfieldMode.DIRICHLET, FarfieldMode.NEUMANN} else FarfieldMode.DIRICHLET
+
+
 def _normalize_cylinder_rotation_mode(raw_value: str | None) -> str:
     value = "stationary" if raw_value is None else str(
         raw_value).strip().lower()
-    return value if value in {"stationary", "oscillatory"} else "stationary"
+    aliases = {
+        "fixed_cylinder": "stationary",
+        "fixed-cylinder": "stationary",
+    }
+    value = aliases.get(value, value)
+    return value if value in {"stationary", "oscillatory", "constant"} else "stationary"
 
 
 def parse_args():
@@ -236,13 +246,13 @@ def parse_args():
                    default=cfg.get("re_is_cylinder_based", True, bool),
                    help="Interpret --re as Re_D based on cylinder diameter when cylinder is enabled")
     p.add_argument("--cylinder-rotation-mode", type=str,
-                   choices=["stationary", "oscillatory"],
+                   choices=["stationary", "oscillatory", "constant"],
                    default=_normalize_cylinder_rotation_mode(
                        cfg.get("cylinder_rotation_mode", "stationary", str)),
                    help="Cylinder wall-motion mode")
     p.add_argument("--cylinder-rotation-amplitude", type=float,
                    default=cfg.get("cylinder_rotation_amplitude", 0.0, float),
-                   help="Angular-velocity amplitude for oscillatory cylinder rotation")
+                   help="Angular velocity for constant rotation, or amplitude for oscillatory rotation")
     p.add_argument("--cylinder-rotation-frequency", type=float,
                    default=cfg.get("cylinder_rotation_frequency", 0.0, float),
                    help="Oscillation frequency for cylinder rotation")
@@ -270,6 +280,14 @@ def parse_args():
                    default=post_cfg.get(
                        "auto_generate_ibm_forcing", False, bool),
                    help="Automatically save a plot of IBM forcing components/magnitude")
+    p.add_argument("--auto-generate-vorticity-video", type=str_to_bool,
+                   default=post_cfg.get(
+                       "auto_generate_vorticity_video", False, bool),
+                   help="Automatically save an animated vorticity GIF from output snapshots")
+    p.add_argument("--auto-vorticity-video-frame-stride", type=int,
+                   default=post_cfg.get(
+                       "auto_vorticity_video_frame_stride", 1, int),
+                   help="Use every nth snapshot when auto-generating the vorticity GIF")
     p.add_argument("--verbose",  type=str_to_bool, default=cfg.get("verbose", True, bool),
                    help="Print periodic diagnostics during the time loop")
 
@@ -298,6 +316,10 @@ def parse_args():
     p.add_argument("--inflow-w", type=float,
                    default=cfg.get("inflow_w", 0.0, float),
                    help="Inflow/farfield z-velocity component for 3-D")
+    p.add_argument("--farfield-mode", type=str,
+                   default=_normalize_farfield_mode(
+                       cfg.get("farfield_mode", FarfieldMode.DIRICHLET, str)),
+                   help="Farfield enforcement: dirichlet or neumann")
     p.add_argument("--wall-slip-mode", type=str,
                    default=cfg.get("wall_slip_mode", "no-slip", str),
                    help="Wall tangential model: no-slip or free-slip")
@@ -399,7 +421,10 @@ def _resolve_cylinder_geometry(args) -> tuple[float, float, float]:
 
 
 def _cylinder_angular_velocity(args, time: float) -> float:
-    if str(args.cylinder_rotation_mode).strip().lower() != "oscillatory":
+    mode = _normalize_cylinder_rotation_mode(args.cylinder_rotation_mode)
+    if mode == "constant":
+        return float(args.cylinder_rotation_amplitude)
+    if mode != "oscillatory":
         return 0.0
     phase = np.deg2rad(float(args.cylinder_rotation_phase_deg))
     return float(
@@ -637,6 +662,7 @@ def run(args, grid=None, grid_loaded_from_file=False):
         wall_slip_mode=str(args.wall_slip_mode).strip().lower(),
         wall_penetration=bool(args.wall_penetration),
         wall_normal_velocity=args.wall_normal_velocity,
+        farfield_mode=_normalize_farfield_mode(args.farfield_mode),
         outflow_mode=str(args.outflow_mode).strip().lower(),
         outflow_speed=args.outflow_speed,
     )
@@ -648,7 +674,8 @@ def run(args, grid=None, grid_loaded_from_file=False):
     r = None
     if args.cylinder:
         cx, cy, r = _resolve_cylinder_geometry(args)
-        if args.cylinder_rotation_mode == "oscillatory":
+        rotation_mode = _normalize_cylinder_rotation_mode(args.cylinder_rotation_mode)
+        if rotation_mode == "oscillatory":
             ibm.add_rotating_circle(
                 cx,
                 cy,
@@ -657,16 +684,28 @@ def run(args, grid=None, grid_loaded_from_file=False):
                 frequency=args.cylinder_rotation_frequency,
                 phase=np.deg2rad(args.cylinder_rotation_phase_deg),
             )
+        elif rotation_mode == "constant":
+            ibm.add_constant_rotating_circle(
+                cx,
+                cy,
+                r,
+                omega=args.cylinder_rotation_amplitude,
+            )
         else:
             ibm.add_circle(cx, cy, r)
         if is_root and args.verbose:
             print(f"  IBM cylinder: centre=({cx:.2f},{cy:.2f}), r={r:.4f}")
-            if args.cylinder_rotation_mode == "oscillatory":
+            if rotation_mode == "oscillatory":
                 print(
                     "  Cylinder rot.: "
                     f"omega(t)={args.cylinder_rotation_amplitude:.4g}"
                     f"*sin(2*pi*{args.cylinder_rotation_frequency:.4g}*t + "
                     f"{args.cylinder_rotation_phase_deg:.4g} deg)"
+                )
+            elif rotation_mode == "constant":
+                print(
+                    "  Cylinder rot.: "
+                    f"omega(t)={args.cylinder_rotation_amplitude:.4g}"
                 )
 
     # ------------------------------------------------------------------
@@ -1014,7 +1053,7 @@ def _run_auto_outputs(grid, args):
             )
 
     latest_snapshot = None
-    if args.auto_generate_ibm_forcing:
+    if args.auto_generate_ibm_forcing or args.auto_generate_vorticity_video:
         latest_snapshot = find_latest_snapshot(dirpath=args.outdir)
         if latest_snapshot is None:
             print(
@@ -1026,6 +1065,17 @@ def _run_auto_outputs(grid, args):
             plot_ibm_forcing(latest_snapshot, save_name="ibm_forcing.png")
         except Exception as exc:
             print(f"  Warning: automatic IBM-forcing plot failed: {exc}")
+
+    if args.auto_generate_vorticity_video:
+        try:
+            plot_vorticity_video(
+                snapshot_dir=args.outdir,
+                save_name="vorticity.gif",
+                frame_stride=max(int(args.auto_vorticity_video_frame_stride), 1),
+                verbose=bool(args.verbose),
+            )
+        except Exception as exc:
+            print(f"  Warning: automatic vorticity video failed: {exc}")
 
 
 # ---------------------------------------------------------------------------

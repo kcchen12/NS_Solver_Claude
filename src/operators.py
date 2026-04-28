@@ -23,7 +23,7 @@ second-order Laplacian stencil.
 
 import numpy as np
 from src.grid import CartesianGrid
-from src.boundary import BoundaryConfig, BCType
+from src.boundary import BoundaryConfig, BCType, FarfieldMode
 
 
 # ---------------------------------------------------------------------------
@@ -34,8 +34,12 @@ def _u_ghost_bottom(u: np.ndarray, bc: BoundaryConfig) -> np.ndarray:
     """Ghost row of u below y = 0 (j = -1)."""
     if bc.bottom == BCType.WALL:
         return -u[:, 0]              # no-slip: average = 0 at face
-    elif bc.bottom in (BCType.INFLOW, BCType.FARFIELD):
+    elif bc.bottom == BCType.INFLOW:
         return 2.0 * bc.u_inf - u[:, 0]
+    elif bc.bottom == BCType.FARFIELD:
+        if str(bc.farfield_mode).lower() == FarfieldMode.DIRICHLET:
+            return 2.0 * bc.u_inf - u[:, 0]
+        return u[:, 0]
     else:
         return u[:, 0]               # Neumann (zero gradient)
 
@@ -44,8 +48,12 @@ def _u_ghost_top(u: np.ndarray, bc: BoundaryConfig) -> np.ndarray:
     """Ghost row of u above y = Ly (j = ny)."""
     if bc.top == BCType.WALL:
         return -u[:, -1]
-    elif bc.top in (BCType.INFLOW, BCType.FARFIELD):
+    elif bc.top == BCType.INFLOW:
         return 2.0 * bc.u_inf - u[:, -1]
+    elif bc.top == BCType.FARFIELD:
+        if str(bc.farfield_mode).lower() == FarfieldMode.DIRICHLET:
+            return 2.0 * bc.u_inf - u[:, -1]
+        return u[:, -1]
     else:
         return u[:, -1]
 
@@ -54,8 +62,12 @@ def _v_ghost_left(v: np.ndarray, bc: BoundaryConfig) -> np.ndarray:
     """Ghost column of v left of x = 0 (i = -1)."""
     if bc.left == BCType.WALL:
         return -v[0, :]
-    elif bc.left in (BCType.INFLOW, BCType.FARFIELD):
+    elif bc.left == BCType.INFLOW:
         return 2.0 * bc.v_inf - v[0, :]
+    elif bc.left == BCType.FARFIELD:
+        if str(bc.farfield_mode).lower() == FarfieldMode.DIRICHLET:
+            return 2.0 * bc.v_inf - v[0, :]
+        return v[0, :]
     else:
         return v[0, :]
 
@@ -64,8 +76,12 @@ def _v_ghost_right(v: np.ndarray, bc: BoundaryConfig) -> np.ndarray:
     """Ghost column of v right of x = Lx (i = nx)."""
     if bc.right == BCType.WALL:
         return -v[-1, :]
-    elif bc.right in (BCType.INFLOW, BCType.FARFIELD):
+    elif bc.right == BCType.INFLOW:
         return 2.0 * bc.v_inf - v[-1, :]
+    elif bc.right == BCType.FARFIELD:
+        if str(bc.farfield_mode).lower() == FarfieldMode.DIRICHLET:
+            return 2.0 * bc.v_inf - v[-1, :]
+        return v[-1, :]
     elif bc.right == BCType.OUTFLOW:
         return v[-1, :]              # Neumann
     else:

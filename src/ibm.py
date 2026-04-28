@@ -152,6 +152,33 @@ class ImmersedBoundary:
             )
         )
 
+    def add_constant_rotating_circle(
+        self,
+        cx: float,
+        cy: float,
+        radius: float,
+        omega: float,
+    ) -> None:
+        """Add a circular cylinder with constant one-direction rotation.
+
+        The imposed angular velocity is
+
+            omega(t) = omega
+
+        with tangential wall velocity
+
+            u = -omega * (y - cy)
+            v =  omega * (x - cx)
+        """
+        self.add_rotating_circle(
+            cx=cx,
+            cy=cy,
+            radius=radius,
+            omega_amplitude=float(omega),
+            frequency=0.0,
+            phase=0.5 * np.pi,
+        )
+
     def add_rectangle(self, x0: float, x1: float,
                       y0: float, y1: float,
                       u_body: float = 0.0, v_body: float = 0.0) -> None:

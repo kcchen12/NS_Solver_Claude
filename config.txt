@@ -3,8 +3,8 @@
 # Format: key = value
 
 # Grid parameters
-nx = 600
-ny = 240
+nx = 400
+ny = 400
 
 # Domain dimensions
 lx = 25.0
@@ -12,8 +12,8 @@ ly = 10.0
 # Optional explicit domain bounds (if omitted, solver uses x:[0,lx], y:[0,ly])
 x_min = -10.0
 x_max = 30.0
-y_min = -10.0
-y_max = 10.0
+y_min = -20.0
+y_max = 20.0
 
 # Physics parameters
 re = 100.0
@@ -30,6 +30,9 @@ inflow_u = 1.0
 inflow_v = 0.0
 initial_v_perturbation_pct = 2.0
 inflow_w = 0.0
+# Farfield behavior (used where face type is 'farfield')
+# farfield_mode: dirichlet | neumann
+farfield_mode = neumann
 
 # Wall behavior (used where face type is 'wall')
 # wall_slip_mode: no-slip | free-slip
@@ -88,9 +91,11 @@ verbose = true
 
 # Cylinder rotation:
 #   stationary  -> fixed_cylinder
+#   constant    -> one-direction constant angular velocity
 #   oscillatory -> back-and-forth sinusoidal angular velocity
-cylinder_rotation_mode = fixed_cylinder
-# omega(t) = amplitude * sin(2*pi*frequency*t + phase)
+cylinder_rotation_mode = constant
+# omega(t) = amplitude           for constant
+# omega(t) = amplitude * sin(2*pi*frequency*t + phase) for oscillatory
 cylinder_rotation_amplitude = 2.0
 cylinder_rotation_frequency = 0.12
 cylinder_rotation_phase_deg = 0.0

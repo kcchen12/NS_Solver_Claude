@@ -30,6 +30,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation, PillowWriter
 
 
 DEFAULT_RESULTS_DIR = "results"
@@ -361,6 +362,126 @@ def plot_snapshot_key(
     plt.close(fig)
 
 
+def _load_snapshot_velocity_fields(file_path: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load face-centered velocity arrays from a snapshot."""
+    with np.load(file_path, allow_pickle=False) as data:
+        if "u" not in data or "v" not in data:
+            raise KeyError(f"Snapshot {file_path} must contain 'u' and 'v' arrays.")
+        u = np.asarray(data["u"], dtype=float)
+        v = np.asarray(data["v"], dtype=float)
+    return u, v
+
+
+def _compute_snapshot_vorticity(
+    file_path: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute cell-centered vorticity from one saved snapshot."""
+    u, v = _load_snapshot_velocity_fields(file_path)
+    nx, ny = u.shape[0] - 1, v.shape[1] - 1
+    xf, yf = _load_grid_faces_for_snapshot(file_path, nx=nx, ny=ny)
+    xc = 0.5 * (xf[:-1] + xf[1:])
+    yc = 0.5 * (yf[:-1] + yf[1:])
+
+    u_c = 0.5 * (u[:-1, :] + u[1:, :])
+    v_c = 0.5 * (v[:, :-1] + v[:, 1:])
+
+    edge_x = 2 if nx >= 3 else 1
+    edge_y = 2 if ny >= 3 else 1
+    dv_dx = np.gradient(v_c, xc, axis=0, edge_order=edge_x)
+    du_dy = np.gradient(u_c, yc, axis=1, edge_order=edge_y)
+    omega = dv_dx - du_dy
+    return xc, yc, omega
+
+
+def plot_vorticity_video(
+    snapshot_dir: str = "output",
+    pattern: str = "snap_*.npz",
+    save_name: str = "vorticity.gif",
+    fps: int = 12,
+    frame_stride: int = 1,
+    verbose: bool = False,
+    results_dir: str = DEFAULT_RESULTS_DIR,
+) -> None:
+    """Create an animated GIF of vorticity over all saved snapshots."""
+    if save_name:
+        plt.switch_backend("Agg")
+
+    paths = sorted(glob.glob(os.path.join(snapshot_dir, pattern)))
+    if not paths:
+        raise FileNotFoundError(
+            f"No snapshots found in '{snapshot_dir}' matching '{pattern}'."
+        )
+    stride = max(int(frame_stride), 1)
+    paths = paths[::stride]
+    total_frames = len(paths)
+    progress_interval = max(1, total_frames // 10)
+
+    if verbose:
+        print(
+            "  Building vorticity video: "
+            f"{total_frames} frame(s) from '{snapshot_dir}' "
+            f"(stride={stride}, fps={max(int(fps), 1)})"
+        )
+
+    frames: list[np.ndarray] = []
+    times: list[float] = []
+    xc = yc = None
+    max_abs_omega = 0.0
+
+    for idx, path in enumerate(paths, start=1):
+        xc_i, yc_i, omega = _compute_snapshot_vorticity(path)
+        frames.append(omega)
+        xc = xc_i
+        yc = yc_i
+        max_abs_omega = max(max_abs_omega, float(np.max(np.abs(omega))))
+        with np.load(path, allow_pickle=False) as data:
+            times.append(float(data["t"]) if "t" in data else float(len(times)))
+        if verbose and (idx == 1 or idx == total_frames or idx % progress_interval == 0):
+            print(f"    Loaded vorticity frame {idx}/{total_frames}")
+
+    if xc is None or yc is None:
+        raise RuntimeError("Failed to assemble vorticity frames.")
+
+    max_abs_omega = max(max_abs_omega, 1e-12)
+    fig, ax = plt.subplots(figsize=(8.5, 4.5))
+    dx = float(xc[1] - xc[0]) if len(xc) > 1 else 1.0
+    dy = float(yc[1] - yc[0]) if len(yc) > 1 else 1.0
+    extent = (
+        float(xc[0] - 0.5 * dx),
+        float(xc[-1] + 0.5 * dx),
+        float(yc[0] - 0.5 * dy),
+        float(yc[-1] + 0.5 * dy),
+    )
+    image = ax.imshow(
+        frames[0].T,
+        origin="lower",
+        extent=extent,
+        cmap="seismic",
+        vmin=-max_abs_omega,
+        vmax=max_abs_omega,
+        aspect="auto",
+    )
+    cbar = fig.colorbar(image, ax=ax)
+    cbar.set_label(r"$\omega_z$")
+    title = ax.set_title(f"Vorticity t={times[0]:.4f}", fontsize=12, fontweight="bold")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_aspect("equal")
+
+    def _update(frame_idx: int):
+        image.set_data(frames[frame_idx].T)
+        title.set_text(f"Vorticity t={times[frame_idx]:.4f}")
+        return [image, title]
+
+    anim = FuncAnimation(fig, _update, frames=len(frames), interval=1000.0 / max(fps, 1), blit=False)
+    save_path = _result_path(save_name, results_dir=results_dir)
+    if verbose:
+        print(f"  Encoding vorticity GIF to {save_path}")
+    anim.save(save_path, writer=PillowWriter(fps=max(int(fps), 1)))
+    print(f"Saved animation: {save_path}")
+    plt.close(fig)
+
+
 def _load_ibm_cell_forcing(file_path: str) -> tuple[np.ndarray, np.ndarray]:
     """Load cell-centered IBM forcing from snapshot, with face-based fallback."""
     with np.load(file_path, allow_pickle=False) as data:
@@ -508,6 +629,8 @@ def main(argv=None):
                         help="plot drag/lift coefficients vs time from forces.csv or aero.csv")
     parser.add_argument("--plot-ibm", action="store_true",
                         help="plot IBM forcing x/y/magnitude from a snapshot")
+    parser.add_argument("--plot-vorticity-video", action="store_true",
+                        help="create an animated vorticity GIF from output snapshots")
     parser.add_argument("--coeff-file", type=str,
                         help="path to coefficient CSV (default: auto from output/)")
     parser.add_argument("--coeff-indir", type=str, default="output",
@@ -515,6 +638,14 @@ def main(argv=None):
     parser.add_argument("--coeff-t-min", type=float, default=0.5,
                         help="minimum time for coefficient plots (default: 0.5)"
                         )
+    parser.add_argument("--snapshot-dir", type=str, default="output",
+                        help="directory searched for snap_*.npz when building a vorticity video")
+    parser.add_argument("--video-fps", type=int, default=12,
+                        help="frames per second for the animated vorticity GIF")
+    parser.add_argument("--video-frame-stride", type=int, default=1,
+                        help="use every nth snapshot when building the vorticity GIF")
+    parser.add_argument("--verbose", action="store_true",
+                        help="print progress while building derived outputs")
     args = parser.parse_args(argv)
 
     if args.plot_coeffs:
@@ -552,6 +683,21 @@ def main(argv=None):
         except Exception as e:
             print(f"Error plotting IBM forcing: {e}", file=sys.stderr)
             sys.exit(9)
+        return
+
+    if args.plot_vorticity_video:
+        save_name = args.save or "vorticity.gif"
+        try:
+            plot_vorticity_video(
+                snapshot_dir=args.snapshot_dir,
+                save_name=save_name,
+                fps=args.video_fps,
+                frame_stride=args.video_frame_stride,
+                verbose=args.verbose,
+            )
+        except Exception as e:
+            print(f"Error creating vorticity video: {e}", file=sys.stderr)
+            sys.exit(10)
         return
 
     if args.file is None:

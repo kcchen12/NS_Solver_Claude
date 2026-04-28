@@ -10,7 +10,7 @@ Tests verify:
 import numpy as np
 import pytest
 from src.grid import CartesianGrid
-from src.boundary import BoundaryConfig, BCType
+from src.boundary import BoundaryConfig, BCType, FarfieldMode
 from src.solver import FractionalStepSolver
 from src.ibm import ImmersedBoundary
 from src.operators import divergence
@@ -114,6 +114,25 @@ class TestPoissonSolver:
         phi = ps.solve(rhs)
         assert np.all(np.isfinite(phi))
 
+    def test_farfield_dirichlet_problem_returns_finite_solution(self):
+        """Dirichlet farfield should be treated as a non-singular pressure solve."""
+        from src.poisson import PoissonSolver
+
+        g = CartesianGrid(8, 6, lx=1.0, ly=1.0)
+        bc = BoundaryConfig(
+            left=BCType.INFLOW,
+            right=BCType.OUTFLOW,
+            bottom=BCType.FARFIELD,
+            top=BCType.FARFIELD,
+            u_inf=1.0,
+            v_inf=0.0,
+            farfield_mode=FarfieldMode.DIRICHLET,
+        )
+        ps = PoissonSolver(g, bc)
+        rhs = np.random.rand(*g.p_shape)
+        phi = ps.solve(rhs)
+        assert np.all(np.isfinite(phi))
+
     def test_poisson_rejects_wrong_rhs_shape(self):
         from src.poisson import PoissonSolver
 
@@ -194,6 +213,26 @@ class TestIBMForcing:
             omega_amplitude=3.0,
             frequency=0.0,
             phase=np.pi / 2.0,
+        )
+
+        solver = FractionalStepSolver(g, bc, nu=0.01, ibm=ibm)
+        solver.init_fields(u0=1.0)
+
+        dt = solver.suggest_dt(cfl_target=0.3)
+        solver.step(dt)
+
+        assert np.any(np.abs(solver.u[ibm.mask_u]) > 0.0)
+        assert np.any(np.abs(solver.v[ibm.mask_v]) > 0.0)
+
+    def test_constant_rotating_ibm_circle_imposes_nonzero_wall_velocity(self):
+        g = CartesianGrid(20, 12, lx=2.0, ly=1.0)
+        bc = channel_bc()
+        ibm = ImmersedBoundary(g)
+        ibm.add_constant_rotating_circle(
+            cx=0.5,
+            cy=0.5,
+            radius=0.1,
+            omega=3.0,
         )
 
         solver = FractionalStepSolver(g, bc, nu=0.01, ibm=ibm)

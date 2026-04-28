@@ -118,6 +118,8 @@ Initialization and runtime plotting:
 - `auto_generate_coeff_history`: automatically generate `results/coeff_history.png`
 - `auto_generate_aero_report`: automatically generate `results/aero_report.txt`
 - `auto_generate_ibm_forcing`: automatically generate `results/ibm_forcing.png` from the latest snapshot
+- `auto_generate_vorticity_video`: automatically generate `results/vorticity.gif` from all saved snapshots
+- `auto_vorticity_video_frame_stride`: use every `n`th snapshot when building the vorticity GIF
 - `auto_coeff_t_min`: minimum time for automatic coefficient-history plotting
 - `auto_aero_t_min`: minimum time for automatic aerodynamic analysis
 
@@ -200,6 +202,8 @@ Enable in [post_config.txt](/Users/Carolyn/Desktop/NS_Solver_Claude/post_config.
 ```text
 plot_grid = true
 auto_generate_grid_spacing = true
+auto_generate_vorticity_video = true
+auto_vorticity_video_frame_stride = 5
 ```
 
 This produces `results/grid.png` with:

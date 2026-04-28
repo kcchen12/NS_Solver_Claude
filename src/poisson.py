@@ -20,7 +20,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
-from src.boundary import BCType, BoundaryConfig
+from src.boundary import BCType, BoundaryConfig, FarfieldMode
 from src.grid import CartesianGrid
 
 
@@ -30,8 +30,19 @@ def _cell_index(i: int, j: int, nx: int) -> int:
 
 
 def _has_outflow_dirichlet(bc: BoundaryConfig) -> bool:
-    """True when any face imposes Dirichlet pressure at outflow."""
-    return any(t == BCType.OUTFLOW for t in [bc.left, bc.right, bc.bottom, bc.top])
+    """True when any face imposes Dirichlet pressure."""
+    farfield_dirichlet = str(bc.farfield_mode).lower() == FarfieldMode.DIRICHLET
+    return any(
+        t == BCType.OUTFLOW or (farfield_dirichlet and t == BCType.FARFIELD)
+        for t in [bc.left, bc.right, bc.bottom, bc.top]
+    )
+
+
+def _is_pressure_dirichlet(face_type: str, bc: BoundaryConfig) -> bool:
+    return face_type == BCType.OUTFLOW or (
+        face_type == BCType.FARFIELD and
+        str(bc.farfield_mode).lower() == FarfieldMode.DIRICHLET
+    )
 
 
 def _regularize_neumann_matrix(A: sp.csr_matrix) -> sp.csr_matrix:
@@ -73,10 +84,10 @@ def build_poisson_matrix(grid: CartesianGrid, bc: BoundaryConfig):
         for i in range(nx):
             idx = _cell_index(i, j, nx)
 
-            dirich_left = (i == 0) and (bc.left == BCType.OUTFLOW)
-            dirich_right = (i == nx - 1) and (bc.right == BCType.OUTFLOW)
-            dirich_bottom = (j == 0) and (bc.bottom == BCType.OUTFLOW)
-            dirich_top = (j == ny - 1) and (bc.top == BCType.OUTFLOW)
+            dirich_left = (i == 0) and _is_pressure_dirichlet(bc.left, bc)
+            dirich_right = (i == nx - 1) and _is_pressure_dirichlet(bc.right, bc)
+            dirich_bottom = (j == 0) and _is_pressure_dirichlet(bc.bottom, bc)
+            dirich_top = (j == ny - 1) and _is_pressure_dirichlet(bc.top, bc)
 
             if dirich_left or dirich_right or dirich_bottom or dirich_top:
                 add(idx, idx, 1.0)
@@ -88,28 +99,28 @@ def build_poisson_matrix(grid: CartesianGrid, bc: BoundaryConfig):
             dyp = dy_cells[j]
 
             if i > 0:
-                left_dirich = (i - 1 == 0) and (bc.left == BCType.OUTFLOW)
+                left_dirich = (i - 1 == 0) and _is_pressure_dirichlet(bc.left, bc)
                 a_w = 1.0 / (dxp * dxc[i - 1])
                 if not left_dirich:
                     add(idx, _cell_index(i - 1, j, nx), a_w)
                 diag -= a_w
 
             if i < nx - 1:
-                right_dirich = (i + 1 == nx - 1) and (bc.right == BCType.OUTFLOW)
+                right_dirich = (i + 1 == nx - 1) and _is_pressure_dirichlet(bc.right, bc)
                 a_e = 1.0 / (dxp * dxc[i])
                 if not right_dirich:
                     add(idx, _cell_index(i + 1, j, nx), a_e)
                 diag -= a_e
 
             if j > 0:
-                bot_dirich = (j - 1 == 0) and (bc.bottom == BCType.OUTFLOW)
+                bot_dirich = (j - 1 == 0) and _is_pressure_dirichlet(bc.bottom, bc)
                 a_s = 1.0 / (dyp * dyc[j - 1])
                 if not bot_dirich:
                     add(idx, _cell_index(i, j - 1, nx), a_s)
                 diag -= a_s
 
             if j < ny - 1:
-                top_dirich = (j + 1 == ny - 1) and (bc.top == BCType.OUTFLOW)
+                top_dirich = (j + 1 == ny - 1) and _is_pressure_dirichlet(bc.top, bc)
                 a_n = 1.0 / (dyp * dyc[j])
                 if not top_dirich:
                     add(idx, _cell_index(i, j + 1, nx), a_n)

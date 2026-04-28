@@ -2,7 +2,14 @@
 import numpy as np
 import pytest
 from src.grid     import CartesianGrid
-from src.boundary import BoundaryConfig, BCType, apply_velocity_bc, apply_pressure_bc
+from src.boundary import (
+    BoundaryConfig,
+    BCType,
+    FarfieldMode,
+    apply_velocity_bc,
+    apply_post_correction_bc,
+    apply_pressure_bc,
+)
 
 
 def make_grid(nx=8, ny=6):
@@ -102,3 +109,92 @@ class TestPressureBC:
         phi = np.random.rand(*g.p_shape) + 1.0
         apply_pressure_bc(phi, g, bc)
         assert np.allclose(phi[g.nx - 1, :], 0.0)
+
+
+class TestFarfieldModes:
+    def test_farfield_dirichlet_sets_prescribed_velocity(self):
+        g = make_grid()
+        bc = BoundaryConfig(
+            left=BCType.INFLOW,
+            right=BCType.OUTFLOW,
+            bottom=BCType.FARFIELD,
+            top=BCType.FARFIELD,
+            u_inf=1.25,
+            v_inf=-0.15,
+            farfield_mode=FarfieldMode.DIRICHLET,
+        )
+        u = np.zeros(g.u_shape)
+        v = np.zeros(g.v_shape)
+        apply_velocity_bc(u, v, g, bc)
+        assert np.allclose(v[:, 0], -0.15)
+        assert np.allclose(v[:, g.ny], -0.15)
+        assert np.allclose(u[1:-1, 0], 1.25)
+        assert np.allclose(u[1:-1, g.ny - 1], 1.25)
+
+    def test_farfield_neumann_copies_adjacent_velocity(self):
+        g = make_grid()
+        bc = BoundaryConfig(
+            left=BCType.FARFIELD,
+            right=BCType.FARFIELD,
+            bottom=BCType.WALL,
+            top=BCType.WALL,
+            farfield_mode=FarfieldMode.NEUMANN,
+        )
+        u = np.random.rand(*g.u_shape)
+        v = np.random.rand(*g.v_shape)
+        u_left_interior = u[1, :].copy()
+        u_right_interior = u[g.nx - 1, :].copy()
+        v_left_interior = v[1, :].copy()
+        v_right_interior = v[g.nx - 2, :].copy()
+        apply_velocity_bc(u, v, g, bc)
+        assert np.allclose(u[0, :], u_left_interior)
+        assert np.allclose(u[g.nx, :], u_right_interior)
+        assert np.allclose(v[0, 1:-1], v_left_interior[1:-1])
+        assert np.allclose(v[g.nx - 1, 1:-1], v_right_interior[1:-1])
+
+    def test_post_correction_farfield_dirichlet_reapplies_full_boundary(self):
+        g = make_grid()
+        bc = BoundaryConfig(
+            left=BCType.INFLOW,
+            right=BCType.OUTFLOW,
+            bottom=BCType.FARFIELD,
+            top=BCType.FARFIELD,
+            u_inf=0.9,
+            v_inf=0.2,
+            farfield_mode=FarfieldMode.DIRICHLET,
+        )
+        u = np.random.rand(*g.u_shape)
+        v = np.random.rand(*g.v_shape)
+        apply_post_correction_bc(u, v, g, bc)
+        assert np.allclose(v[:, 0], 0.2)
+        assert np.allclose(v[:, g.ny], 0.2)
+        assert np.allclose(u[1:-1, 0], 0.9)
+        assert np.allclose(u[1:-1, g.ny - 1], 0.9)
+
+    def test_farfield_dirichlet_sets_pressure_zero(self):
+        g = make_grid()
+        bc = BoundaryConfig(
+            left=BCType.INFLOW,
+            right=BCType.OUTFLOW,
+            bottom=BCType.FARFIELD,
+            top=BCType.FARFIELD,
+            farfield_mode=FarfieldMode.DIRICHLET,
+        )
+        phi = np.random.rand(*g.p_shape) + 1.0
+        apply_pressure_bc(phi, g, bc)
+        assert np.allclose(phi[:, 0], 0.0)
+        assert np.allclose(phi[:, g.ny - 1], 0.0)
+
+    def test_farfield_neumann_copies_pressure(self):
+        g = make_grid()
+        bc = BoundaryConfig(
+            left=BCType.FARFIELD,
+            right=BCType.OUTFLOW,
+            bottom=BCType.WALL,
+            top=BCType.WALL,
+            farfield_mode=FarfieldMode.NEUMANN,
+        )
+        phi = np.random.rand(*g.p_shape)
+        phi_ref = phi[1, :].copy()
+        apply_pressure_bc(phi, g, bc)
+        assert np.allclose(phi[0, 1:-1], phi_ref[1:-1])
