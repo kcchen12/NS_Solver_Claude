@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
-from scipy.signal import lombscargle
 
 from src.config import ConfigParser
 
@@ -322,9 +321,8 @@ def _dominant_frequency(
     t_min: float,
     f_min: float,
     f_max: float,
-    n_freq: int,
 ) -> Optional[Tuple[float, float]]:
-    """Return (f_peak, peak_power) from Lomb-Scargle spectrum."""
+    """Return (f_peak, peak_power) from a one-sided Fourier power spectrum."""
     mask = t >= t_min
     ts = t[mask]
     ys = signal[mask]
@@ -337,12 +335,29 @@ def _dominant_frequency(
     if sigma < 1e-12:
         return None
 
-    freq = np.linspace(f_min, f_max, n_freq)
-    omega = 2.0 * np.pi * freq
-    power = lombscargle(ts, ys, omega, precenter=False, normalize=True)
-    idx = int(np.argmax(power))
+    dt = np.diff(ts)
+    dt_ref = float(np.median(dt)) if dt.size else np.nan
+    if not np.isfinite(dt_ref) or dt_ref <= 0.0:
+        return None
+    if not np.allclose(dt, dt_ref, rtol=1e-4, atol=1e-10):
+        raise ValueError(
+            "Fourier power spectrum requires uniformly spaced snapshots after "
+            f"t_min={t_min:g}. Re-run with regular save_dt and no missing files."
+        )
 
-    return float(freq[idx]), float(power[idx])
+    freq = np.fft.rfftfreq(ts.size, d=dt_ref)
+    spectrum = np.fft.rfft(ys)
+    power = (np.abs(spectrum) ** 2) / float(ts.size**2)
+
+    band = (freq >= f_min) & (freq <= f_max)
+    if not np.any(band):
+        return None
+
+    freq_band = freq[band]
+    power_band = power[band]
+    idx = int(np.argmax(power_band))
+
+    return float(freq_band[idx]), float(power_band[idx])
 
 
 def _is_edge_frequency(f: float, f_min: float, f_max: float) -> bool:
@@ -499,8 +514,6 @@ def parse_args() -> argparse.Namespace:
                         help="Min search frequency (default: 0.05)")
     parser.add_argument("--f-max", type=float, default=2.0,
                         help="Max search frequency (default: 2.0)")
-    parser.add_argument("--n-freq", type=int, default=4000,
-                        help="Number of frequency samples (default: 4000)")
 
     parser.add_argument("--save-series", type=str, default=None,
                         help="Optional CSV path for combined time series")
@@ -525,7 +538,6 @@ def run_analysis(
     t_min: float = 1.0,
     f_min: float = 0.05,
     f_max: float = 2.0,
-    n_freq: int = 4000,
     save_series: Optional[str] = None,
     save_report: Optional[str] = os.path.join(DEFAULT_RESULTS_DIR, "aero_report.txt"),
 ) -> int:
@@ -579,7 +591,6 @@ def run_analysis(
         t_min=t_min,
         f_min=f_min,
         f_max=f_max,
-        n_freq=n_freq,
     )
     if out is not None:
         f_peak, peak_power = out
@@ -724,7 +735,6 @@ def main() -> int:
         t_min=args.t_min,
         f_min=args.f_min,
         f_max=args.f_max,
-        n_freq=args.n_freq,
         save_series=args.save_series,
         save_report=args.save_report,
     )

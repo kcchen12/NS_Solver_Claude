@@ -82,11 +82,9 @@ Core grid and physics:
 Grid control:
 
 - `uniform_grid`: `true` for uniform, `false` for nonuniform
-- `grid_nonuniform_mode`: `center-band` or `center-uniform`
-- `grid_beta_x`, `grid_beta_y`: tanh stretch strength / center-density strength in each direction
-- `grid_band_fraction_x`, `grid_band_fraction_y`: fraction of the domain refined around the center band in `center-band` mode
-- `grid_uniform_x_start`, `grid_uniform_x_end`: explicit x-bounds of the uniform core in `center-uniform` mode
-- `grid_uniform_y_start`, `grid_uniform_y_end`: explicit y-bounds of the uniform core in `center-uniform` mode
+- `grid_beta_x`, `grid_beta_y`: tanh stretch strength in each direction for nonuniform grids
+- `grid_uniform_x_start`, `grid_uniform_x_end`: explicit x-bounds of the uniform core for nonuniform grids
+- `grid_uniform_y_start`, `grid_uniform_y_end`: explicit y-bounds of the uniform core for nonuniform grids
 
 Boundary conditions:
 
@@ -105,14 +103,14 @@ Cylinder / immersed boundary:
 - `cylinder_radius`
 - `re_is_cylinder_based`
 
-Initialization and runtime plotting:
+Initialization and runtime:
 
 - `initial_v_perturbation_pct`: one-time startup perturbation applied to interior `v` as a percent of `inflow_u`
-- `plot`: save the standard end-of-run result figure
 - `verbose`: print run diagnostics
 
 ### Post Config
 
+- `plot`: save the standard end-of-run result figure
 - `plot_grid`: save the grid-spacing/concentration figure
 - `auto_generate_grid_spacing`: automatically generate `results/grid.png`
 - `auto_generate_coeff_history`: automatically generate `results/coeff_history.png`
@@ -144,13 +142,12 @@ This does not permanently change the configured boundary condition values. It on
 
 ### Nonuniform Grid
 
-The current nonuniform grid is a center-band refinement, not a boundary-layer stretch.
+The current nonuniform grid uses a uniform central core with tanh-stretched outer regions.
 
-- Outside the refined band, spacing stays close to normal uniform spacing
-- Inside the band, cell density increases smoothly toward the middle
-- `beta_x` and `beta_y` control how much denser the middle becomes
-- `band_fraction_x` and `band_fraction_y` control how wide that refined middle region is
-- Example: band_faction _x = 0.333333 refines the middle third.
+- `beta_x` and `beta_y` control how strongly the outer regions stretch away from the core
+- `grid_uniform_x_start` and `grid_uniform_x_end` define the flat-spacing core in `x`
+- `grid_uniform_y_start` and `grid_uniform_y_end` define the flat-spacing core in `y`
+- When the `y` domain is symmetric about `0`, the nonuniform `y` core must also be symmetric
 
 Prepared grid metadata is saved automatically into `outdir` as either:
 
@@ -168,7 +165,7 @@ python pre_generate_grid.py
 Generate a nonuniform prepared grid:
 
 ```bash
-python pre_generate_grid.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0 --band-fraction-x 0.33 --band-fraction-y 0.33
+python pre_generate_grid.py --grid-type nonuniform --beta-x 2.5 --beta-y 2.0 --uniform-x-start 6.0 --uniform-x-end 10.0 --uniform-y-start 3.5 --uniform-y-end 6.5
 ```
 
 Common options:
@@ -176,8 +173,8 @@ Common options:
 - `--nx`, `--ny`, `--lx`, `--ly`
 - `--grid-type uniform|nonuniform`
 - `--beta-x`, `--beta-y`
-- `--band-fraction-x`, `--band-fraction-y`
-- `--focus-x`, `--focus-y`
+- `--uniform-x-start`, `--uniform-x-end`
+- `--uniform-y-start`, `--uniform-y-end`
 - `--outdir`
 - `--output-name`
 
@@ -187,7 +184,7 @@ Common outputs:
 
 - `output/snap_*.npz`: solution snapshots
 - `output/uniform_grid.npz` or `output/nonuniform_grid.npz`: prepared grid metadata
-- `results/result.png`: standard flow plot from `main.py` when `plot = true`
+- `results/result.png`: standard flow plot from `main.py` when `plot = true` in `post_config.txt`
 - `results/grid.png`: physical grid / spacing plot
 - `results/aero.csv`: coefficient and force history
 - `results/coeff_history.png`: drag/lift history figure
@@ -267,7 +264,7 @@ Useful analysis options:
 - `--use-cylinder-diameter`
 - `--cylinder-radius`
 - `--t-min`
-- `--f-min`, `--f-max`, `--n-freq`
+- `--f-min`, `--f-max`
 - `--save-series`
 - `--save-report`
 

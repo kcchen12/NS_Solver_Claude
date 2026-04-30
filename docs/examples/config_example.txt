@@ -44,29 +44,22 @@ cfl = 0.5
 save_dt = 0.02
 outdir = output
 
-# Unified grid controls used by both main.py and pre_generate_grid.py
+# Grid generation used by both main.py and pre_generate_grid.py
 # uniform_grid = true  -> uniform mesh
-# uniform_grid = false -> nonuniform mesh (see mode below)
+# uniform_grid = false -> nonuniform mesh
 uniform_grid = false
-# center-band    -> denser cells inside a central band
-# center-uniform -> uniform central core with tanh-stretched outer regions
-grid_nonuniform_mode = center-band
+# Nonuniform grids use a uniform central core with tanh-stretched outer regions.
 grid_beta_x = 2.0
 grid_beta_y = 2.0
-# Used by center-band mode
-grid_band_fraction_x = 0.333333
-grid_band_fraction_y = 0.333333
-# Used by center-uniform mode
 grid_uniform_x_start = 6.0
 grid_uniform_x_end = 10.0
 grid_uniform_y_start = 3.5
 grid_uniform_y_end = 6.5
 
-# Optional legacy compatibility keys still exist in the parser, but the
-# unified keys above are the recommended way to configure new runs.
-
 # Features (true/false)
 cylinder = true
+
+# Cylinder
 cylinder_center_x = 8.0
 cylinder_center_y = 5.0
 cylinder_radius = 0.5
@@ -75,7 +68,6 @@ cylinder_rotation_amplitude = 0.0
 cylinder_rotation_frequency = 0.0
 cylinder_rotation_phase_deg = 0.0
 re_is_cylinder_based = true
-plot = true
 verbose = true
 
 # Optional aerodynamic post-processing normalization used by

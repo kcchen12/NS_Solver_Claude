@@ -2,6 +2,7 @@
 # Keeps reporting/visualization controls separate from the run setup.
 
 # Grid visualization
+plot = true
 plot_grid = false
 auto_generate_grid_spacing = true
 auto_generate_ibm_forcing = true

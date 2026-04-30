@@ -53,49 +53,37 @@ cfl = .5
 # I/O parameters
 save_dt = 0.02
 outdir = output
-# Unified grid controls (used by both main.py and pre_generate_grid.py)
+# Grid generation (used by both main.py and pre_generate_grid.py)
 uniform_grid = false
-# Nonuniform mode:
-#   center-band    -> denser cells inside a central band
-#   center-uniform -> uniform central core with tanh-stretched outer regions
-grid_nonuniform_mode = center-uniform
-
-# Tanh stretching strength / center-density strength.
+# Nonuniform grids use a uniform central core with tanh-stretched outer regions.
 # Set <=0 in a direction to make that direction uniform.
 grid_beta_x = 2.0
 grid_beta_y = 2.0
 
-# Used only by center-band mode:
-# fraction of each domain direction covered by the refined center band.
-grid_band_fraction_x = 0.333333
-grid_band_fraction_y = 0.333333
-
-# Used only by center-uniform mode:
 grid_uniform_x_start = -2.0
 grid_uniform_x_end = 15.0
 grid_uniform_y_start = -5.0
 grid_uniform_y_end = 5.0
-# Legacy compatibility key still read by the parser
-runtime_nonuniform_mode = center-uniform
 
 # Features (true/false)
 cylinder = true
+verbose = true
+
+# Cylinder
 cylinder_center_x = 0.0
 cylinder_center_y = 0.0
 # Cylinder radius in physical units (set > 0 to override default ly/8)
 cylinder_radius = 0.5
 # If true, re is interpreted as Re_D based on cylinder diameter
 re_is_cylinder_based = true
-plot = true
-verbose = true
 
-# Cylinder rotation:
+# Cylinder rotation
 #   stationary  -> fixed_cylinder
 #   constant    -> one-direction constant angular velocity
 #   oscillatory -> back-and-forth sinusoidal angular velocity
-cylinder_rotation_mode = constant
-# omega(t) = amplitude           for constant
+cylinder_rotation_mode = stationary
+# omega(t) = amplitude  for constant
 # omega(t) = amplitude * sin(2*pi*frequency*t + phase) for oscillatory
-cylinder_rotation_amplitude = 2.0
+cylinder_rotation_amplitude = 5.0
 cylinder_rotation_frequency = 0.12
 cylinder_rotation_phase_deg = 0.0
