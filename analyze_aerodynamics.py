@@ -154,6 +154,14 @@ def _build_uniform_face_and_center_coords(
 
 def _load_snapshot_fields(path: str, *field_names: str) -> tuple[np.ndarray, ...]:
     with np.load(path, allow_pickle=False) as data:
+        missing = [name for name in field_names if name not in data.files]
+        if missing:
+            available = ", ".join(sorted(data.files))
+            missing_str = ", ".join(missing)
+            raise KeyError(
+                f"Snapshot {os.path.basename(path)!r} is missing field(s): "
+                f"{missing_str}. Available fields: {available}"
+            )
         return tuple(np.array(data[name], copy=True) for name in field_names)
 
 
@@ -425,8 +433,40 @@ def _compute_forces(
         fy_meta = _safe_scalar(data, "meta_ibm_force_y")
         if fx_meta is not None and fy_meta is not None:
             return float(fx_meta), float(fy_meta)
+        if "p" not in data.files:
+            available = ", ".join(sorted(data.files))
+            raise KeyError(
+                f"Snapshot {os.path.basename(snapshot_path)!r} is missing field "
+                f"'p'. Available fields: {available}"
+            )
         p = data["p"]
     return _compute_pressure_forces(p, force_plan)
+
+
+def _filter_valid_snapshots(
+    snapshots: List[Tuple[float, str]],
+) -> Tuple[List[Tuple[float, str]], List[str]]:
+    """Keep only snapshots that include the fields aerodynamic analysis needs."""
+    valid: List[Tuple[float, str]] = []
+    skipped: List[str] = []
+
+    for t, path in snapshots:
+        try:
+            with np.load(path, allow_pickle=False) as data:
+                has_velocity = "u" in data.files and "v" in data.files
+                has_force_meta = (
+                    "meta_ibm_force_x" in data.files and
+                    "meta_ibm_force_y" in data.files
+                )
+                has_pressure = "p" in data.files
+                if has_velocity and (has_force_meta or has_pressure):
+                    valid.append((t, path))
+                else:
+                    skipped.append(os.path.basename(path))
+        except Exception:
+            skipped.append(os.path.basename(path))
+
+    return valid, skipped
 
 
 def _compute_coefficients(
@@ -550,6 +590,18 @@ def run_analysis(
     snapshots = _collect_snapshots(indir, pattern)
     if not snapshots:
         print(f"No snapshots found in {indir!r} with pattern {pattern!r}.")
+        return 1
+
+    snapshots, skipped = _filter_valid_snapshots(snapshots)
+    if skipped:
+        preview = ", ".join(skipped[:5])
+        suffix = "" if len(skipped) <= 5 else ", ..."
+        print(
+            f"Skipped {len(skipped)} snapshot(s) missing required fields: "
+            f"{preview}{suffix}"
+        )
+    if not snapshots:
+        print("No valid snapshots remain after filtering incomplete files.")
         return 1
 
     l_char, u_ref, nx, ny, lx, ly = _estimate_scales(

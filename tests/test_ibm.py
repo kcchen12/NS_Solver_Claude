@@ -162,3 +162,28 @@ class TestIBMSweepingJet:
 
         body_only_v = ibm.mask_v & ~spec.mask_v
         assert np.allclose(v[body_only_v], 0.0)
+
+    def test_geometry_resolved_jet_cavity_is_fluid(self):
+        g = CartesianGrid(100, 100, lx=2.0, ly=2.0)
+        ibm = ImmersedBoundary(g)
+        ibm.add_geometry_resolved_sweeping_jet_circle(
+            cx=1.0,
+            cy=1.0,
+            radius=0.5,
+            jet_speed=0.4,
+            cavity_width=0.4,
+            cavity_height=0.3,
+            slot_width=0.12,
+            slot_height=0.08,
+            feed_width=0.18,
+            feed_height=0.08,
+            sweep_amplitude_deg=0.0,
+            frequency=0.0,
+        )
+
+        i_c = int(np.argmin(np.abs(g.xf - 1.0)))
+        j_cavity = int(np.argmin(np.abs(g.yc - 1.28)))
+        j_body = int(np.argmin(np.abs(g.yc - 1.0)))
+        assert not ibm.mask_u[i_c, j_cavity]
+        assert ibm.mask_u[i_c, j_body]
+        assert len(ibm.oscillating_jet_patches) == 1

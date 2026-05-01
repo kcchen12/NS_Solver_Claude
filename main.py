@@ -103,15 +103,48 @@ def _normalize_ibm_shape(raw_value: str | None) -> str:
     return value if value in {"circle", "circle-with-top-indent"} else "circle"
 
 
+def _normalize_cylinder_geometry_mode(raw_value: str | None) -> str:
+    value = "circle" if raw_value is None else str(raw_value).strip().lower()
+    aliases = {
+        "ibm-circle": "circle",
+        "indented-circle": "circle-with-top-indent",
+        "rectangular-top-indent": "circle-with-top-indent",
+    }
+    return _normalize_ibm_shape(aliases.get(value, value))
+
+
 def _normalize_cylinder_actuation_mode(raw_value: str | None) -> str:
     value = "none" if raw_value is None else str(raw_value).strip().lower()
     aliases = {
         "off": "none",
         "sweeping_jet": "sweeping-jet",
         "jet": "sweeping-jet",
+        "geometry_resolved_sweeping_jet": "geometry-resolved-sweeping-jet",
+        "resolved-jet": "geometry-resolved-sweeping-jet",
     }
     value = aliases.get(value, value)
-    return value if value in {"none", "sweeping-jet"} else "none"
+    return value if value in {"none", "sweeping-jet", "geometry-resolved-sweeping-jet"} else "none"
+
+
+def _normalize_cylinder_experiment_mode(raw_value: str | None) -> str:
+    value = "none" if raw_value is None else str(raw_value).strip().lower()
+    aliases = {
+        "off": "none",
+        "indent": "top-indent",
+        "rectangular-indent": "top-indent",
+        "simulated-jet": "simulated-sweeping-jet",
+        "simulated_sweeping_jet": "simulated-sweeping-jet",
+        "geometry-resolved-jet": "geometry-resolved-sweeping-jet",
+        "geometry_resolved_sweeping_jet": "geometry-resolved-sweeping-jet",
+    }
+    value = aliases.get(value, value)
+    valid = {
+        "none",
+        "top-indent",
+        "simulated-sweeping-jet",
+        "geometry-resolved-sweeping-jet",
+    }
+    return value if value in valid else "none"
 
 
 def parse_args():
@@ -224,10 +257,33 @@ def parse_args():
     p.add_argument("--cylinder-center-y", type=float,
                    default=cfg.get("cylinder_center_y", -1.0, float),
                    help="Cylinder center y-coordinate in physical units (<0 uses default ly/2)")
+    p.add_argument("--cylinder-experiment", type=str,
+                   choices=[
+                       "none",
+                       "top-indent",
+                       "simulated-sweeping-jet",
+                       "geometry-resolved-sweeping-jet",
+                   ],
+                   default=_normalize_cylinder_experiment_mode(
+                       cfg.get("cylinder_experiment", "none", str)),
+                   help="High-level experimental cylinder mode")
+    p.add_argument("--cylinder-geometry-mode", type=str,
+                   choices=["circle", "circle-with-top-indent"],
+                   default=_normalize_cylinder_geometry_mode(
+                       cfg.get(
+                           "cylinder_geometry_mode",
+                           cfg.get("ibm_shape", "circle", str),
+                           str,
+                       )),
+                   help="Cylinder geometry mode")
     p.add_argument("--ibm-shape", type=str,
                    choices=["circle", "circle-with-top-indent"],
-                   default=_normalize_ibm_shape(
-                       cfg.get("ibm_shape", "circle", str)),
+                   default=_normalize_cylinder_geometry_mode(
+                       cfg.get(
+                           "cylinder_geometry_mode",
+                           cfg.get("ibm_shape", "circle", str),
+                           str,
+                       )),
                    help="Immersed-body shape")
     p.add_argument("--cylinder-indent-width", type=float,
                    default=cfg.get("cylinder_indent_width", 0.0, float),
@@ -236,9 +292,13 @@ def parse_args():
                    default=cfg.get("cylinder_indent_depth", 0.0, float),
                    help="Depth of the rectangular top indent for circle-with-top-indent")
     p.add_argument("--cylinder-actuation-mode", type=str,
-                   choices=["none", "sweeping-jet"],
+                   choices=["none", "sweeping-jet", "geometry-resolved-sweeping-jet"],
                    default=_normalize_cylinder_actuation_mode(
-                       cfg.get("cylinder_actuation_mode", "none", str)),
+                       cfg.get(
+                           "cylinder_actuation_mode",
+                           cfg.get("actuator_model", "none", str),
+                           str,
+                       )),
                    help="Optional finite jet actuation model on the cylinder surface")
     p.add_argument("--sweeping-jet-velocity-ratio", type=float,
                    default=cfg.get("sweeping_jet_velocity_ratio", 0.25, float),
@@ -261,6 +321,24 @@ def parse_args():
     p.add_argument("--sweeping-jet-phase-deg", type=float,
                    default=cfg.get("sweeping_jet_phase_deg", 0.0, float),
                    help="Phase offset for the sweeping jet direction oscillation")
+    p.add_argument("--resolved-jet-cavity-width", type=float,
+                   default=cfg.get("resolved_jet_cavity_width", 0.0, float),
+                   help="Width of the internal plenum for geometry-resolved jet mode")
+    p.add_argument("--resolved-jet-cavity-height", type=float,
+                   default=cfg.get("resolved_jet_cavity_height", 0.0, float),
+                   help="Height of the internal plenum for geometry-resolved jet mode")
+    p.add_argument("--resolved-jet-slot-width", type=float,
+                   default=cfg.get("resolved_jet_slot_width", 0.0, float),
+                   help="Width of the exit slot for geometry-resolved jet mode")
+    p.add_argument("--resolved-jet-slot-height", type=float,
+                   default=cfg.get("resolved_jet_slot_height", 0.0, float),
+                   help="Height of the exit slot for geometry-resolved jet mode")
+    p.add_argument("--resolved-jet-feed-width", type=float,
+                   default=cfg.get("resolved_jet_feed_width", 0.0, float),
+                   help="Width of the internal forcing/feed patch for geometry-resolved jet mode")
+    p.add_argument("--resolved-jet-feed-height", type=float,
+                   default=cfg.get("resolved_jet_feed_height", 0.0, float),
+                   help="Height of the internal forcing/feed patch for geometry-resolved jet mode")
     p.add_argument("--re-is-cylinder-based", type=str_to_bool,
                    default=cfg.get("re_is_cylinder_based", True, bool),
                    help="Interpret --re as Re_D based on cylinder diameter when cylinder is enabled")
@@ -454,14 +532,92 @@ def _resolve_sweeping_jet_geometry(args, radius: float, inflow_u: float) -> dict
     }
 
 
+def _resolve_geometry_resolved_jet_geometry(args, radius: float, inflow_u: float) -> dict:
+    jet_cfg = _resolve_sweeping_jet_geometry(args, radius, inflow_u)
+
+    cavity_width = float(args.resolved_jet_cavity_width)
+    cavity_height = float(args.resolved_jet_cavity_height)
+    slot_width = float(args.resolved_jet_slot_width)
+    slot_height = float(args.resolved_jet_slot_height)
+    feed_width = float(args.resolved_jet_feed_width)
+    feed_height = float(args.resolved_jet_feed_height)
+
+    if cavity_width <= 0.0:
+        cavity_width = 0.9 * radius
+    if cavity_height <= 0.0:
+        cavity_height = 0.75 * radius
+    if slot_width <= 0.0:
+        slot_width = 0.24 * radius
+    if slot_height <= 0.0:
+        slot_height = 0.18 * radius
+    if feed_width <= 0.0:
+        feed_width = 0.45 * radius
+    if feed_height <= 0.0:
+        feed_height = 0.22 * radius
+
+    jet_cfg.update({
+        "cavity_width": cavity_width,
+        "cavity_height": cavity_height,
+        "slot_width": slot_width,
+        "slot_height": slot_height,
+        "feed_width": feed_width,
+        "feed_height": feed_height,
+    })
+    return jet_cfg
+
+
+def _resolve_experiment_overrides(args) -> tuple[str, str]:
+    experiment = _normalize_cylinder_experiment_mode(
+        getattr(args, "cylinder_experiment", "none")
+    )
+    if experiment == "top-indent":
+        return "circle-with-top-indent", "none"
+    if experiment == "simulated-sweeping-jet":
+        return "circle", "sweeping-jet"
+    if experiment == "geometry-resolved-sweeping-jet":
+        return "circle", "geometry-resolved-sweeping-jet"
+
+    shape = _normalize_cylinder_geometry_mode(
+        getattr(args, "cylinder_geometry_mode", getattr(args, "ibm_shape", "circle"))
+    )
+    actuation = _normalize_cylinder_actuation_mode(
+        getattr(args, "cylinder_actuation_mode", "none")
+    )
+    return shape, actuation
+
+
 def _plot_ibm_outline(ax, args, color: str = "white", linewidth: float = 1.6) -> None:
     cx, cy, radius = _resolve_cylinder_geometry(args)
-    shape = _normalize_ibm_shape(getattr(args, "ibm_shape", "circle"))
+    shape, actuation_mode = _resolve_experiment_overrides(args)
     theta = np.linspace(0.0, 2.0 * np.pi, 361)
     x = cx + radius * np.cos(theta)
     y = cy + radius * np.sin(theta)
     if shape == "circle":
         ax.plot(x, y, color=color, linewidth=linewidth, zorder=6)
+        if actuation_mode == "geometry-resolved-sweeping-jet":
+            jet_cfg = _resolve_geometry_resolved_jet_geometry(args, radius, 1.0)
+            cavity_x0 = cx - 0.5 * jet_cfg["cavity_width"]
+            cavity_x1 = cx + 0.5 * jet_cfg["cavity_width"]
+            cavity_y1 = cy + radius - jet_cfg["slot_height"]
+            cavity_y0 = cavity_y1 - jet_cfg["cavity_height"]
+            slot_x0 = cx - 0.5 * jet_cfg["slot_width"]
+            slot_x1 = cx + 0.5 * jet_cfg["slot_width"]
+            slot_y0 = cy + radius - jet_cfg["slot_height"]
+            slot_y1 = cy + radius
+            ax.plot(
+                [cavity_x0, cavity_x1, cavity_x1, cavity_x0, cavity_x0],
+                [cavity_y0, cavity_y0, cavity_y1, cavity_y1, cavity_y0],
+                color=color,
+                linewidth=linewidth * 0.9,
+                zorder=6,
+            )
+            ax.plot(
+                [slot_x0, slot_x1, slot_x1, slot_x0, slot_x0],
+                [slot_y0, slot_y0, slot_y1, slot_y1, slot_y0],
+                color=color,
+                linewidth=linewidth * 0.9,
+                zorder=6,
+            )
         return
 
     indent_width, indent_depth = _resolve_indent_geometry(args, radius)
@@ -728,9 +884,7 @@ def run(args, grid=None, grid_loaded_from_file=False):
     r = None
     if args.cylinder:
         cx, cy, r = _resolve_cylinder_geometry(args)
-        ibm_shape = _normalize_ibm_shape(args.ibm_shape)
-        actuation_mode = _normalize_cylinder_actuation_mode(
-            args.cylinder_actuation_mode)
+        ibm_shape, actuation_mode = _resolve_experiment_overrides(args)
         rotation_mode = _normalize_cylinder_rotation_mode(args.cylinder_rotation_mode)
         if ibm_shape != "circle" and rotation_mode != "stationary":
             raise ValueError(
@@ -738,11 +892,11 @@ def run(args, grid=None, grid_loaded_from_file=False):
             )
         if actuation_mode != "none" and ibm_shape != "circle":
             raise ValueError(
-                "sweeping-jet actuation currently supports circle geometry only"
+                "jet actuation currently supports circle geometry only"
             )
         if actuation_mode != "none" and rotation_mode != "stationary":
             raise ValueError(
-                "sweeping-jet actuation currently supports stationary cylinders only"
+                "jet actuation currently supports stationary cylinders only"
             )
         if rotation_mode == "oscillatory":
             ibm.add_rotating_circle(
@@ -786,9 +940,27 @@ def run(args, grid=None, grid_loaded_from_file=False):
                 frequency=jet_cfg["frequency"],
                 phase=jet_cfg["phase_rad"],
             )
+        elif actuation_mode == "geometry-resolved-sweeping-jet":
+            jet_cfg = _resolve_geometry_resolved_jet_geometry(args, r, bc.u_inf)
+            ibm.add_geometry_resolved_sweeping_jet_circle(
+                cx=cx,
+                cy=cy,
+                radius=r,
+                jet_speed=jet_cfg["jet_speed"],
+                cavity_width=jet_cfg["cavity_width"],
+                cavity_height=jet_cfg["cavity_height"],
+                slot_width=jet_cfg["slot_width"],
+                slot_height=jet_cfg["slot_height"],
+                feed_width=jet_cfg["feed_width"],
+                feed_height=jet_cfg["feed_height"],
+                sweep_amplitude_deg=jet_cfg["angle_deg"],
+                frequency=jet_cfg["frequency"],
+                phase=jet_cfg["phase_rad"],
+            )
         if is_root and args.verbose:
             print(
-                f"  IBM cylinder: centre=({cx:.2f},{cy:.2f}), r={r:.4f}, shape={ibm_shape}"
+                f"  IBM cylinder: centre=({cx:.2f},{cy:.2f}), r={r:.4f}, "
+                f"shape={ibm_shape}, experiment={_normalize_cylinder_experiment_mode(args.cylinder_experiment)}"
             )
             if ibm_shape == "circle-with-top-indent":
                 indent_width, indent_depth = _resolve_indent_geometry(args, r)
@@ -805,6 +977,17 @@ def run(args, grid=None, grid_loaded_from_file=False):
                     f"slot_center={jet_cfg['center_deg']:.2f} deg, "
                     f"slot_width={jet_cfg['slot_width_deg']:.2f} deg, "
                     f"slot_depth={jet_cfg['slot_depth']:.4f}, "
+                    f"sweep={jet_cfg['angle_deg']:.2f} deg"
+                )
+            elif actuation_mode == "geometry-resolved-sweeping-jet":
+                jet_cfg = _resolve_geometry_resolved_jet_geometry(args, r, bc.u_inf)
+                print(
+                    "  Jet actuator : "
+                    f"mode=geometry-resolved, speed={jet_cfg['jet_speed']:.4f}, "
+                    f"f={jet_cfg['frequency']:.4f}, "
+                    f"cavity=({jet_cfg['cavity_width']:.4f} x {jet_cfg['cavity_height']:.4f}), "
+                    f"slot=({jet_cfg['slot_width']:.4f} x {jet_cfg['slot_height']:.4f}), "
+                    f"feed=({jet_cfg['feed_width']:.4f} x {jet_cfg['feed_height']:.4f}), "
                     f"sweep={jet_cfg['angle_deg']:.2f} deg"
                 )
             if rotation_mode == "oscillatory":

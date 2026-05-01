@@ -425,21 +425,33 @@ def plot_vorticity_video(
 
     frames: list[np.ndarray] = []
     times: list[float] = []
+    skipped: list[str] = []
     xc = yc = None
     max_abs_omega = 0.0
 
     for idx, path in enumerate(paths, start=1):
-        xc_i, yc_i, omega = _compute_snapshot_vorticity(path)
-        frames.append(omega)
-        xc = xc_i
-        yc = yc_i
-        max_abs_omega = max(max_abs_omega, float(np.max(np.abs(omega))))
-        with np.load(path, allow_pickle=False) as data:
-            times.append(float(data["t"]) if "t" in data else float(len(times)))
-        if verbose and (idx == 1 or idx == total_frames or idx % progress_interval == 0):
-            print(f"    Loaded vorticity frame {idx}/{total_frames}")
+        try:
+            xc_i, yc_i, omega = _compute_snapshot_vorticity(path)
+            frames.append(omega)
+            xc = xc_i
+            yc = yc_i
+            max_abs_omega = max(max_abs_omega, float(np.max(np.abs(omega))))
+            with np.load(path, allow_pickle=False) as data:
+                times.append(float(data["t"]) if "t" in data else float(len(times)))
+            if verbose and (idx == 1 or idx == total_frames or idx % progress_interval == 0):
+                print(f"    Loaded vorticity frame {idx}/{total_frames}")
+        except Exception:
+            skipped.append(os.path.basename(path))
 
-    if xc is None or yc is None:
+    if skipped:
+        preview = ", ".join(skipped[:5])
+        suffix = "" if len(skipped) <= 5 else ", ..."
+        print(
+            f"Skipped {len(skipped)} vorticity frame(s) due to incomplete snapshots: "
+            f"{preview}{suffix}"
+        )
+
+    if xc is None or yc is None or not frames:
         raise RuntimeError("Failed to assemble vorticity frames.")
 
     max_abs_omega = max(max_abs_omega, 1e-12)
