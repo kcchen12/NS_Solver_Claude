@@ -91,6 +91,18 @@ def _normalize_cylinder_rotation_mode(raw_value: str | None) -> str:
     return value if value in {"stationary", "oscillatory", "constant"} else "stationary"
 
 
+def _normalize_ibm_shape(raw_value: str | None) -> str:
+    value = "circle" if raw_value is None else str(raw_value).strip().lower()
+    aliases = {
+        "cylinder": "circle",
+        "circle_top_indent": "circle-with-top-indent",
+        "circle-with-indent": "circle-with-top-indent",
+        "indented-circle": "circle-with-top-indent",
+    }
+    value = aliases.get(value, value)
+    return value if value in {"circle", "circle-with-top-indent"} else "circle"
+
+
 def parse_args():
     """
     Parse command-line arguments and merge with config file.
@@ -201,6 +213,17 @@ def parse_args():
     p.add_argument("--cylinder-center-y", type=float,
                    default=cfg.get("cylinder_center_y", -1.0, float),
                    help="Cylinder center y-coordinate in physical units (<0 uses default ly/2)")
+    p.add_argument("--ibm-shape", type=str,
+                   choices=["circle", "circle-with-top-indent"],
+                   default=_normalize_ibm_shape(
+                       cfg.get("ibm_shape", "circle", str)),
+                   help="Immersed-body shape")
+    p.add_argument("--cylinder-indent-width", type=float,
+                   default=cfg.get("cylinder_indent_width", 0.0, float),
+                   help="Width of the rectangular top indent for circle-with-top-indent")
+    p.add_argument("--cylinder-indent-depth", type=float,
+                   default=cfg.get("cylinder_indent_depth", 0.0, float),
+                   help="Depth of the rectangular top indent for circle-with-top-indent")
     p.add_argument("--re-is-cylinder-based", type=str_to_bool,
                    default=cfg.get("re_is_cylinder_based", True, bool),
                    help="Interpret --re as Re_D based on cylinder diameter when cylinder is enabled")
@@ -359,6 +382,55 @@ def _resolve_cylinder_geometry(args) -> tuple[float, float, float]:
     cy = args.cylinder_center_y if args.cylinder_center_y >= 0.0 else args.y_min + 0.5 * args.ly
     radius = args.cylinder_radius if args.cylinder_radius > 0.0 else args.ly / 8.0
     return cx, cy, radius
+
+
+def _resolve_indent_geometry(args, radius: float) -> tuple[float, float]:
+    indent_width = float(args.cylinder_indent_width)
+    indent_depth = float(args.cylinder_indent_depth)
+    if indent_width <= 0.0:
+        indent_width = 0.6 * radius
+    if indent_depth <= 0.0:
+        indent_depth = 0.35 * radius
+    return indent_width, indent_depth
+
+
+def _plot_ibm_outline(ax, args, color: str = "white", linewidth: float = 1.6) -> None:
+    cx, cy, radius = _resolve_cylinder_geometry(args)
+    shape = _normalize_ibm_shape(getattr(args, "ibm_shape", "circle"))
+    theta = np.linspace(0.0, 2.0 * np.pi, 361)
+    x = cx + radius * np.cos(theta)
+    y = cy + radius * np.sin(theta)
+    if shape == "circle":
+        ax.plot(x, y, color=color, linewidth=linewidth, zorder=6)
+        return
+
+    indent_width, indent_depth = _resolve_indent_geometry(args, radius)
+    notch_left = cx - 0.5 * indent_width
+    notch_right = cx + 0.5 * indent_width
+    notch_bottom = cy + radius - indent_depth
+    wall_top = cy + np.sqrt(max(radius ** 2 - (0.5 * indent_width) ** 2, 0.0))
+    notch_mask = (
+        (x >= notch_left)
+        & (x <= notch_right)
+        & (y >= notch_bottom)
+    )
+    if np.all(notch_mask):
+        ax.plot(x, y, color=color, linewidth=linewidth, zorder=6)
+        return
+
+    x_visible = x.copy()
+    y_visible = y.copy()
+    x_visible[notch_mask] = np.nan
+    y_visible[notch_mask] = np.nan
+    ax.plot(x_visible, y_visible, color=color, linewidth=linewidth, zorder=6)
+
+    ax.plot(
+        [notch_left, notch_left, notch_right, notch_right],
+        [wall_top, notch_bottom, notch_bottom, wall_top],
+        color=color,
+        linewidth=linewidth,
+        zorder=6,
+    )
 
 
 def _cylinder_angular_velocity(args, time: float) -> float:
@@ -596,7 +668,12 @@ def run(args, grid=None, grid_loaded_from_file=False):
     r = None
     if args.cylinder:
         cx, cy, r = _resolve_cylinder_geometry(args)
+        ibm_shape = _normalize_ibm_shape(args.ibm_shape)
         rotation_mode = _normalize_cylinder_rotation_mode(args.cylinder_rotation_mode)
+        if ibm_shape != "circle" and rotation_mode != "stationary":
+            raise ValueError(
+                "circle-with-top-indent currently supports stationary IBM bodies only"
+            )
         if rotation_mode == "oscillatory":
             ibm.add_rotating_circle(
                 cx,
@@ -614,9 +691,27 @@ def run(args, grid=None, grid_loaded_from_file=False):
                 omega=args.cylinder_rotation_amplitude,
             )
         else:
-            ibm.add_circle(cx, cy, r)
+            if ibm_shape == "circle-with-top-indent":
+                indent_width, indent_depth = _resolve_indent_geometry(args, r)
+                ibm.add_circle_with_top_indent(
+                    cx,
+                    cy,
+                    r,
+                    indent_width=indent_width,
+                    indent_depth=indent_depth,
+                )
+            else:
+                ibm.add_circle(cx, cy, r)
         if is_root and args.verbose:
-            print(f"  IBM cylinder: centre=({cx:.2f},{cy:.2f}), r={r:.4f}")
+            print(
+                f"  IBM cylinder: centre=({cx:.2f},{cy:.2f}), r={r:.4f}, shape={ibm_shape}"
+            )
+            if ibm_shape == "circle-with-top-indent":
+                indent_width, indent_depth = _resolve_indent_geometry(args, r)
+                print(
+                    "  Top indent   : "
+                    f"width={indent_width:.4f}, depth={indent_depth:.4f}"
+                )
             if rotation_mode == "oscillatory":
                 print(
                     "  Cylinder rot.: "
@@ -743,23 +838,10 @@ def _plot_results(solver, grid, args):
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 
     if args.cylinder:
-        from matplotlib.patches import Circle
-        cx, cy, radius = _resolve_cylinder_geometry(args)
-
         # Draw the immersed cylinder on every panel so geometry alignment
         # is visible in vorticity, pressure, and velocity plots.
         for ax in axes:
-            edge_color = "white"
-            ax.add_patch(
-                Circle(
-                    (cx, cy),
-                    radius,
-                    fill=False,
-                    ec=edge_color,
-                    lw=1.6,
-                    zorder=6,
-                )
-            )
+            _plot_ibm_outline(ax, args, color="white", linewidth=1.6)
 
     # Vorticity: use robust clipping + high-contrast diverging map
     # so coherent structures are easier to read.
@@ -887,28 +969,8 @@ def _plot_grid(grid, args):
         )
 
     if args.cylinder:
-        from matplotlib.patches import Circle
-        cx, cy, radius = _resolve_cylinder_geometry(args)
-        mesh_ax.add_patch(
-            Circle(
-                (cx, cy),
-                radius,
-                fill=False,
-                ec="#001219",
-                lw=1.8,
-                zorder=5,
-            )
-        )
-        density_ax.add_patch(
-            Circle(
-                (cx, cy),
-                radius,
-                fill=False,
-                ec="white",
-                lw=1.6,
-                zorder=5,
-            )
-        )
+        _plot_ibm_outline(mesh_ax, args, color="#001219", linewidth=1.8)
+        _plot_ibm_outline(density_ax, args, color="white", linewidth=1.6)
 
     fig.suptitle(
         f"Grid type={args.grid_type}"

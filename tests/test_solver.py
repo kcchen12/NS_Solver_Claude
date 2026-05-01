@@ -180,6 +180,27 @@ class TestIBMForcing:
         assert np.isfinite(solver.last_ibm_force_x)
         assert np.isfinite(solver.last_ibm_force_y)
 
+    def test_indented_ibm_solid_cells_zero_after_step(self):
+        g = CartesianGrid(64, 64, lx=2.0, ly=2.0)
+        bc = channel_bc()
+        ibm = ImmersedBoundary(g)
+        ibm.add_circle_with_top_indent(
+            cx=0.6,
+            cy=1.0,
+            radius=0.25,
+            indent_width=0.15,
+            indent_depth=0.08,
+        )
+
+        solver = FractionalStepSolver(g, bc, nu=0.01, ibm=ibm)
+        solver.init_fields(u0=1.0)
+
+        dt = solver.suggest_dt(cfl_target=0.3)
+        solver.step(dt)
+
+        assert np.allclose(solver.u[ibm.mask_u], 0.0, atol=1e-12)
+        assert np.allclose(solver.v[ibm.mask_v], 0.0, atol=1e-12)
+
     def test_ibm_forcing_fields_are_available_for_snapshots(self):
         """IBM forcing fields should be tracked on faces and cell centres."""
         g = CartesianGrid(20, 12, lx=2.0, ly=1.0)

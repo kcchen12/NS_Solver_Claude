@@ -99,3 +99,36 @@ class TestIBMRectangle:
         i_c = int(np.argmin(np.abs(g.xf - 0.5)))
         j_c = int(np.argmin(np.abs(g.yc - 0.5)))
         assert ibm.mask_u[i_c, j_c]
+
+
+class TestIBMIndentedCircle:
+    def test_top_indent_clears_top_center(self):
+        g = CartesianGrid(80, 80, lx=2.0, ly=2.0)
+        ibm = ImmersedBoundary(g)
+        cx, cy, r = 1.0, 1.0, 0.5
+        ibm.add_circle_with_top_indent(
+            cx=cx,
+            cy=cy,
+            radius=r,
+            indent_width=0.3,
+            indent_depth=0.2,
+        )
+
+        i_center = int(np.argmin(np.abs(g.xf - cx)))
+        j_notch = int(np.argmin(np.abs(g.yc - (cy + r - 0.1))))
+        j_body = int(np.argmin(np.abs(g.yc - cy)))
+
+        assert not ibm.mask_u[i_center, j_notch]
+        assert ibm.mask_u[i_center, j_body]
+
+    def test_invalid_indent_rejected(self):
+        g = CartesianGrid(20, 20, lx=2.0, ly=2.0)
+        ibm = ImmersedBoundary(g)
+        with pytest.raises(ValueError):
+            ibm.add_circle_with_top_indent(
+                cx=1.0,
+                cy=1.0,
+                radius=0.3,
+                indent_width=0.7,
+                indent_depth=0.1,
+            )

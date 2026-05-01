@@ -76,6 +76,65 @@ class ImmersedBoundary:
         self.mask_v = np.zeros(grid.v_shape, dtype=bool)
         self.rotating_circles: list[RotatingCircleSpec] = []
 
+    @staticmethod
+    def _circle_mask(
+        x_coords: np.ndarray,
+        y_coords: np.ndarray,
+        cx: float,
+        cy: float,
+        radius: float,
+    ) -> np.ndarray:
+        radius_sq = float(radius) ** 2
+        return ((x_coords - cx) ** 2 + (y_coords - cy) ** 2) <= radius_sq
+
+    @staticmethod
+    def _top_indent_mask(
+        x_coords: np.ndarray,
+        y_coords: np.ndarray,
+        cx: float,
+        cy: float,
+        radius: float,
+        indent_width: float,
+        indent_depth: float,
+    ) -> np.ndarray:
+        if indent_width <= 0.0 or indent_depth <= 0.0:
+            return np.zeros_like(x_coords, dtype=bool)
+
+        half_width = 0.5 * float(indent_width)
+        y0 = float(cy + radius - indent_depth)
+        y1 = float(cy + radius)
+        return (
+            (x_coords >= cx - half_width)
+            & (x_coords <= cx + half_width)
+            & (y_coords >= y0)
+            & (y_coords <= y1)
+        )
+
+    def _circle_with_top_indent_masks(
+        self,
+        cx: float,
+        cy: float,
+        radius: float,
+        indent_width: float,
+        indent_depth: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        grid = self.grid
+
+        xf = grid.xf[:, np.newaxis]
+        yc = grid.yc[np.newaxis, :]
+        mask_u = self._circle_mask(xf, yc, cx, cy, radius)
+        mask_u &= ~self._top_indent_mask(
+            xf, yc, cx, cy, radius, indent_width, indent_depth
+        )
+
+        xc = grid.xc[:, np.newaxis]
+        yf = grid.yf[np.newaxis, :]
+        mask_v = self._circle_mask(xc, yf, cx, cy, radius)
+        mask_v &= ~self._top_indent_mask(
+            xc, yf, cx, cy, radius, indent_width, indent_depth
+        )
+        return mask_u, mask_v
+
     # ------------------------------------------------------------------
     # Geometry builders
     # ------------------------------------------------------------------
@@ -96,15 +155,49 @@ class ImmersedBoundary:
         """
         del u_body, v_body
         grid = self.grid
-        radius_sq = radius**2
-
         xf = grid.xf[:, np.newaxis]
         yc = grid.yc[np.newaxis, :]
-        self.mask_u |= ((xf - cx) ** 2 + (yc - cy) ** 2) <= radius_sq
+        self.mask_u |= self._circle_mask(xf, yc, cx, cy, radius)
 
         xc = grid.xc[:, np.newaxis]
         yf = grid.yf[np.newaxis, :]
-        self.mask_v |= ((xc - cx) ** 2 + (yf - cy) ** 2) <= radius_sq
+        self.mask_v |= self._circle_mask(xc, yf, cx, cy, radius)
+
+    def add_circle_with_top_indent(
+        self,
+        cx: float,
+        cy: float,
+        radius: float,
+        indent_width: float,
+        indent_depth: float,
+        u_body: float = 0.0,
+        v_body: float = 0.0,
+    ) -> None:
+        """
+        Mark a circular body with a rectangular cut-out at the top as solid.
+
+        The indent is centered at x=cx and removes the region
+        [cx-indent_width/2, cx+indent_width/2] x [cy+radius-indent_depth, cy+radius].
+        """
+        del u_body, v_body
+        if radius <= 0.0:
+            raise ValueError("radius must be positive")
+        if indent_width <= 0.0 or indent_depth <= 0.0:
+            raise ValueError("indent_width and indent_depth must be positive")
+        if indent_width >= 2.0 * radius:
+            raise ValueError("indent_width must be smaller than the cylinder diameter")
+        if indent_depth >= 2.0 * radius:
+            raise ValueError("indent_depth must be smaller than the cylinder diameter")
+
+        mask_u, mask_v = self._circle_with_top_indent_masks(
+            cx=cx,
+            cy=cy,
+            radius=radius,
+            indent_width=indent_width,
+            indent_depth=indent_depth,
+        )
+        self.mask_u |= mask_u
+        self.mask_v |= mask_v
 
     def add_rotating_circle(
         self,
@@ -127,15 +220,14 @@ class ImmersedBoundary:
             v =  omega(t) * (x - cx)
         """
         grid = self.grid
-        radius_sq = radius**2
 
         xf = grid.xf[:, np.newaxis]
         yc = grid.yc[np.newaxis, :]
-        mask_u = ((xf - cx) ** 2 + (yc - cy) ** 2) <= radius_sq
+        mask_u = self._circle_mask(xf, yc, cx, cy, radius)
 
         xc = grid.xc[:, np.newaxis]
         yf = grid.yf[np.newaxis, :]
-        mask_v = ((xc - cx) ** 2 + (yf - cy) ** 2) <= radius_sq
+        mask_v = self._circle_mask(xc, yf, cx, cy, radius)
 
         self.mask_u |= mask_u
         self.mask_v |= mask_v

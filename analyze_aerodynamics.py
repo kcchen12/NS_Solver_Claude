@@ -339,11 +339,16 @@ def _dominant_frequency(
     dt_ref = float(np.median(dt)) if dt.size else np.nan
     if not np.isfinite(dt_ref) or dt_ref <= 0.0:
         return None
+
     if not np.allclose(dt, dt_ref, rtol=1e-4, atol=1e-10):
-        raise ValueError(
-            "Fourier power spectrum requires uniformly spaced snapshots after "
-            f"t_min={t_min:g}. Re-run with regular save_dt and no missing files."
-        )
+        # Snapshot times can drift under adaptive stepping even when the saved
+        # history is otherwise smooth. Resample onto a uniform grid before FFT.
+        n_uniform = int(np.floor((ts[-1] - ts[0]) / dt_ref)) + 1
+        if n_uniform < 8:
+            return None
+        ts_uniform = ts[0] + dt_ref * np.arange(n_uniform, dtype=float)
+        ys = np.interp(ts_uniform, ts, ys)
+        ts = ts_uniform
 
     freq = np.fft.rfftfreq(ts.size, d=dt_ref)
     spectrum = np.fft.rfft(ys)
