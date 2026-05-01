@@ -74,9 +74,17 @@ cylinder_center_x = 0.0
 cylinder_center_y = 0.0
 # Cylinder radius in physical units (set > 0 to override default ly/8)
 cylinder_radius = 1.0
-ibm_shape = circle-with-top-indent
-cylinder_indent_width = 0.6
-cylinder_indent_depth = 0.7
+ibm_shape = circle
+cylinder_indent_width = 0.0
+cylinder_indent_depth = 0.0
+cylinder_actuation_mode = sweeping-jet
+sweeping_jet_velocity_ratio = 0.25
+sweeping_jet_frequency = -1.0
+sweeping_jet_center_deg = 90.0
+sweeping_jet_slot_width_deg = 18.0
+sweeping_jet_slot_depth = 0.15
+sweeping_jet_angle_deg = 25.0
+sweeping_jet_phase_deg = 0.0
 # If true, re is interpreted as Re_D based on cylinder diameter
 re_is_cylinder_based = true
 

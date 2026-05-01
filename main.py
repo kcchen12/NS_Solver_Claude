@@ -103,6 +103,17 @@ def _normalize_ibm_shape(raw_value: str | None) -> str:
     return value if value in {"circle", "circle-with-top-indent"} else "circle"
 
 
+def _normalize_cylinder_actuation_mode(raw_value: str | None) -> str:
+    value = "none" if raw_value is None else str(raw_value).strip().lower()
+    aliases = {
+        "off": "none",
+        "sweeping_jet": "sweeping-jet",
+        "jet": "sweeping-jet",
+    }
+    value = aliases.get(value, value)
+    return value if value in {"none", "sweeping-jet"} else "none"
+
+
 def parse_args():
     """
     Parse command-line arguments and merge with config file.
@@ -224,6 +235,32 @@ def parse_args():
     p.add_argument("--cylinder-indent-depth", type=float,
                    default=cfg.get("cylinder_indent_depth", 0.0, float),
                    help="Depth of the rectangular top indent for circle-with-top-indent")
+    p.add_argument("--cylinder-actuation-mode", type=str,
+                   choices=["none", "sweeping-jet"],
+                   default=_normalize_cylinder_actuation_mode(
+                       cfg.get("cylinder_actuation_mode", "none", str)),
+                   help="Optional finite jet actuation model on the cylinder surface")
+    p.add_argument("--sweeping-jet-velocity-ratio", type=float,
+                   default=cfg.get("sweeping_jet_velocity_ratio", 0.25, float),
+                   help="Jet speed magnitude relative to inflow_u")
+    p.add_argument("--sweeping-jet-frequency", type=float,
+                   default=cfg.get("sweeping_jet_frequency", -1.0, float),
+                   help="Jet sweep frequency; <=0 uses a shedding-scale default")
+    p.add_argument("--sweeping-jet-center-deg", type=float,
+                   default=cfg.get("sweeping_jet_center_deg", 90.0, float),
+                   help="Angular location of the jet outlet on the cylinder surface")
+    p.add_argument("--sweeping-jet-slot-width-deg", type=float,
+                   default=cfg.get("sweeping_jet_slot_width_deg", 18.0, float),
+                   help="Angular width of the finite jet outlet")
+    p.add_argument("--sweeping-jet-slot-depth", type=float,
+                   default=cfg.get("sweeping_jet_slot_depth", 0.0, float),
+                   help="Radial depth of the finite jet outlet band inside the IBM body")
+    p.add_argument("--sweeping-jet-angle-deg", type=float,
+                   default=cfg.get("sweeping_jet_angle_deg", 25.0, float),
+                   help="Sweep amplitude of the jet direction relative to the local normal")
+    p.add_argument("--sweeping-jet-phase-deg", type=float,
+                   default=cfg.get("sweeping_jet_phase_deg", 0.0, float),
+                   help="Phase offset for the sweeping jet direction oscillation")
     p.add_argument("--re-is-cylinder-based", type=str_to_bool,
                    default=cfg.get("re_is_cylinder_based", True, bool),
                    help="Interpret --re as Re_D based on cylinder diameter when cylinder is enabled")
@@ -392,6 +429,29 @@ def _resolve_indent_geometry(args, radius: float) -> tuple[float, float]:
     if indent_depth <= 0.0:
         indent_depth = 0.35 * radius
     return indent_width, indent_depth
+
+
+def _resolve_sweeping_jet_geometry(args, radius: float, inflow_u: float) -> dict:
+    velocity_ratio = max(float(args.sweeping_jet_velocity_ratio), 0.0)
+    jet_speed = velocity_ratio * abs(float(inflow_u))
+    slot_depth = float(args.sweeping_jet_slot_depth)
+    if slot_depth <= 0.0:
+        slot_depth = 0.15 * radius
+
+    frequency = float(args.sweeping_jet_frequency)
+    if frequency <= 0.0:
+        diameter = 2.0 * radius
+        frequency = 0.16 * abs(float(inflow_u)) / diameter if diameter > 0.0 else 0.0
+
+    return {
+        "jet_speed": jet_speed,
+        "frequency": frequency,
+        "center_deg": float(args.sweeping_jet_center_deg),
+        "slot_width_deg": float(args.sweeping_jet_slot_width_deg),
+        "slot_depth": slot_depth,
+        "angle_deg": float(args.sweeping_jet_angle_deg),
+        "phase_rad": np.deg2rad(float(args.sweeping_jet_phase_deg)),
+    }
 
 
 def _plot_ibm_outline(ax, args, color: str = "white", linewidth: float = 1.6) -> None:
@@ -669,10 +729,20 @@ def run(args, grid=None, grid_loaded_from_file=False):
     if args.cylinder:
         cx, cy, r = _resolve_cylinder_geometry(args)
         ibm_shape = _normalize_ibm_shape(args.ibm_shape)
+        actuation_mode = _normalize_cylinder_actuation_mode(
+            args.cylinder_actuation_mode)
         rotation_mode = _normalize_cylinder_rotation_mode(args.cylinder_rotation_mode)
         if ibm_shape != "circle" and rotation_mode != "stationary":
             raise ValueError(
                 "circle-with-top-indent currently supports stationary IBM bodies only"
+            )
+        if actuation_mode != "none" and ibm_shape != "circle":
+            raise ValueError(
+                "sweeping-jet actuation currently supports circle geometry only"
+            )
+        if actuation_mode != "none" and rotation_mode != "stationary":
+            raise ValueError(
+                "sweeping-jet actuation currently supports stationary cylinders only"
             )
         if rotation_mode == "oscillatory":
             ibm.add_rotating_circle(
@@ -702,6 +772,20 @@ def run(args, grid=None, grid_loaded_from_file=False):
                 )
             else:
                 ibm.add_circle(cx, cy, r)
+        if actuation_mode == "sweeping-jet":
+            jet_cfg = _resolve_sweeping_jet_geometry(args, r, bc.u_inf)
+            ibm.add_sweeping_jet_circle(
+                cx=cx,
+                cy=cy,
+                radius=r,
+                jet_speed=jet_cfg["jet_speed"],
+                slot_center_angle_deg=jet_cfg["center_deg"],
+                slot_width_angle_deg=jet_cfg["slot_width_deg"],
+                slot_depth=jet_cfg["slot_depth"],
+                sweep_amplitude_deg=jet_cfg["angle_deg"],
+                frequency=jet_cfg["frequency"],
+                phase=jet_cfg["phase_rad"],
+            )
         if is_root and args.verbose:
             print(
                 f"  IBM cylinder: centre=({cx:.2f},{cy:.2f}), r={r:.4f}, shape={ibm_shape}"
@@ -711,6 +795,17 @@ def run(args, grid=None, grid_loaded_from_file=False):
                 print(
                     "  Top indent   : "
                     f"width={indent_width:.4f}, depth={indent_depth:.4f}"
+                )
+            if actuation_mode == "sweeping-jet":
+                jet_cfg = _resolve_sweeping_jet_geometry(args, r, bc.u_inf)
+                print(
+                    "  Jet actuator : "
+                    f"speed={jet_cfg['jet_speed']:.4f}, "
+                    f"f={jet_cfg['frequency']:.4f}, "
+                    f"slot_center={jet_cfg['center_deg']:.2f} deg, "
+                    f"slot_width={jet_cfg['slot_width_deg']:.2f} deg, "
+                    f"slot_depth={jet_cfg['slot_depth']:.4f}, "
+                    f"sweep={jet_cfg['angle_deg']:.2f} deg"
                 )
             if rotation_mode == "oscillatory":
                 print(

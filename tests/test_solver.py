@@ -265,6 +265,34 @@ class TestIBMForcing:
         assert np.any(np.abs(solver.u[ibm.mask_u]) > 0.0)
         assert np.any(np.abs(solver.v[ibm.mask_v]) > 0.0)
 
+    def test_sweeping_jet_circle_imposes_localized_nonzero_velocity(self):
+        g = CartesianGrid(64, 64, lx=2.0, ly=2.0)
+        bc = channel_bc()
+        ibm = ImmersedBoundary(g)
+        ibm.add_sweeping_jet_circle(
+            cx=0.6,
+            cy=1.0,
+            radius=0.25,
+            jet_speed=0.5,
+            slot_center_angle_deg=90.0,
+            slot_width_angle_deg=18.0,
+            slot_depth=0.05,
+            sweep_amplitude_deg=0.0,
+            frequency=0.0,
+        )
+
+        solver = FractionalStepSolver(g, bc, nu=0.01, ibm=ibm)
+        solver.init_fields(u0=1.0)
+
+        dt = solver.suggest_dt(cfl_target=0.3)
+        solver.step(dt)
+
+        spec = ibm.sweeping_jets[0]
+        assert np.any(np.abs(solver.u[spec.mask_u]) > 0.0)
+        assert np.any(np.abs(solver.v[spec.mask_v]) > 0.0)
+        nonjet_v = ibm.mask_v & ~spec.mask_v
+        assert np.allclose(solver.v[nonjet_v], 0.0, atol=1e-12)
+
 
 # ---------------------------------------------------------------------------
 # Suggest dt

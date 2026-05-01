@@ -60,6 +60,27 @@ class RotatingCircleSpec:
         )
 
 
+@dataclass
+class SweepingJetSpec:
+    cx: float
+    cy: float
+    radius: float
+    jet_speed: float
+    slot_center_angle: float
+    slot_width_angle: float
+    slot_depth: float
+    sweep_amplitude: float
+    frequency: float
+    phase: float
+    mask_u: np.ndarray
+    mask_v: np.ndarray
+
+    def sweep_angle(self, time: float) -> float:
+        return float(
+            self.sweep_amplitude * np.sin(2.0 * np.pi * self.frequency * time + self.phase)
+        )
+
+
 class ImmersedBoundary:
     """
     Manages solid-body masks for the IBM direct-forcing approach.
@@ -75,6 +96,7 @@ class ImmersedBoundary:
         self.mask_u = np.zeros(grid.u_shape, dtype=bool)
         self.mask_v = np.zeros(grid.v_shape, dtype=bool)
         self.rotating_circles: list[RotatingCircleSpec] = []
+        self.sweeping_jets: list[SweepingJetSpec] = []
 
     @staticmethod
     def _circle_mask(
@@ -132,6 +154,42 @@ class ImmersedBoundary:
         mask_v = self._circle_mask(xc, yf, cx, cy, radius)
         mask_v &= ~self._top_indent_mask(
             xc, yf, cx, cy, radius, indent_width, indent_depth
+        )
+        return mask_u, mask_v
+
+    @staticmethod
+    def _wrap_angle(angle: np.ndarray | float) -> np.ndarray | float:
+        return np.arctan2(np.sin(angle), np.cos(angle))
+
+    def _circular_slot_masks(
+        self,
+        cx: float,
+        cy: float,
+        radius: float,
+        slot_center_angle: float,
+        slot_width_angle: float,
+        slot_depth: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        grid = self.grid
+
+        xf = grid.xf[:, np.newaxis]
+        yc = grid.yc[np.newaxis, :]
+        r_u = np.sqrt((xf - cx) ** 2 + (yc - cy) ** 2)
+        theta_u = np.arctan2(yc - cy, xf - cx)
+        mask_u = (
+            (r_u <= radius)
+            & (r_u >= radius - slot_depth)
+            & (np.abs(self._wrap_angle(theta_u - slot_center_angle)) <= 0.5 * slot_width_angle)
+        )
+
+        xc = grid.xc[:, np.newaxis]
+        yf = grid.yf[np.newaxis, :]
+        r_v = np.sqrt((xc - cx) ** 2 + (yf - cy) ** 2)
+        theta_v = np.arctan2(yf - cy, xc - cx)
+        mask_v = (
+            (r_v <= radius)
+            & (r_v >= radius - slot_depth)
+            & (np.abs(self._wrap_angle(theta_v - slot_center_angle)) <= 0.5 * slot_width_angle)
         )
         return mask_u, mask_v
 
@@ -271,6 +329,70 @@ class ImmersedBoundary:
             phase=0.5 * np.pi,
         )
 
+    def add_sweeping_jet_circle(
+        self,
+        cx: float,
+        cy: float,
+        radius: float,
+        jet_speed: float,
+        slot_center_angle_deg: float = 90.0,
+        slot_width_angle_deg: float = 18.0,
+        slot_depth: float = 0.0,
+        sweep_amplitude_deg: float = 25.0,
+        frequency: float = 0.0,
+        phase: float = 0.0,
+    ) -> None:
+        """
+        Add a finite-width sweeping jet outlet on a circular IBM body.
+
+        The outlet location is fixed on the body surface, while the jet
+        direction oscillates relative to the local outward normal:
+
+            u_jet = U_j * (cos(alpha(t)) * n_hat + sin(alpha(t)) * t_hat)
+
+        where alpha(t) = sweep_amplitude * sin(2*pi*frequency*t + phase).
+        """
+        if radius <= 0.0:
+            raise ValueError("radius must be positive")
+        if jet_speed < 0.0:
+            raise ValueError("jet_speed must be non-negative")
+
+        slot_width_angle = np.deg2rad(float(slot_width_angle_deg))
+        if slot_width_angle <= 0.0 or slot_width_angle >= 2.0 * np.pi:
+            raise ValueError("slot_width_angle_deg must be in (0, 360)")
+
+        if slot_depth <= 0.0:
+            slot_depth = 0.15 * radius
+        if slot_depth >= radius:
+            raise ValueError("slot_depth must be smaller than the cylinder radius")
+
+        mask_u, mask_v = self._circular_slot_masks(
+            cx=cx,
+            cy=cy,
+            radius=radius,
+            slot_center_angle=np.deg2rad(float(slot_center_angle_deg)),
+            slot_width_angle=slot_width_angle,
+            slot_depth=float(slot_depth),
+        )
+
+        self.add_circle(cx, cy, radius)
+        self.sweeping_jets.append(
+            SweepingJetSpec(
+                cx=float(cx),
+                cy=float(cy),
+                radius=float(radius),
+                jet_speed=float(jet_speed),
+                slot_center_angle=np.deg2rad(float(slot_center_angle_deg)),
+                slot_width_angle=slot_width_angle,
+                slot_depth=float(slot_depth),
+                sweep_amplitude=np.deg2rad(float(sweep_amplitude_deg)),
+                frequency=float(frequency),
+                phase=float(phase),
+                mask_u=mask_u,
+                mask_v=mask_v,
+            )
+        )
+
     def add_rectangle(self, x0: float, x1: float,
                       y0: float, y1: float,
                       u_body: float = 0.0, v_body: float = 0.0) -> None:
@@ -333,6 +455,36 @@ class ImmersedBoundary:
                 omega = spec.angular_velocity(time)
                 u_target[spec.mask_u] = -omega * (u_y[spec.mask_u] - spec.cy)
                 v_target[spec.mask_v] = omega * (v_x[spec.mask_v] - spec.cx)
+
+        if self.sweeping_jets:
+            u_x = np.broadcast_to(self.grid.xf[:, np.newaxis], self.grid.u_shape)
+            u_y = np.broadcast_to(self.grid.yc[np.newaxis, :], self.grid.u_shape)
+            v_x = np.broadcast_to(self.grid.xc[:, np.newaxis], self.grid.v_shape)
+            v_y = np.broadcast_to(self.grid.yf[np.newaxis, :], self.grid.v_shape)
+            for spec in self.sweeping_jets:
+                alpha = spec.sweep_angle(time)
+
+                ru = np.sqrt((u_x - spec.cx) ** 2 + (u_y - spec.cy) ** 2)
+                rv = np.sqrt((v_x - spec.cx) ** 2 + (v_y - spec.cy) ** 2)
+                ru = np.where(ru > 1e-14, ru, 1.0)
+                rv = np.where(rv > 1e-14, rv, 1.0)
+
+                nu_x = (u_x - spec.cx) / ru
+                nu_y = (u_y - spec.cy) / ru
+                nv_x = (v_x - spec.cx) / rv
+                nv_y = (v_y - spec.cy) / rv
+
+                tu_x = -nu_y
+                tu_y = nu_x
+                tv_x = -nv_y
+                tv_y = nv_x
+
+                u_target[spec.mask_u] = spec.jet_speed * (
+                    np.cos(alpha) * nu_x[spec.mask_u] + np.sin(alpha) * tu_x[spec.mask_u]
+                )
+                v_target[spec.mask_v] = spec.jet_speed * (
+                    np.cos(alpha) * nv_y[spec.mask_v] + np.sin(alpha) * tv_y[spec.mask_v]
+                )
 
         if dt is not None and dt > 0.0:
             face_area = self.grid.mean_cell_area
