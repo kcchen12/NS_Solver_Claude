@@ -82,6 +82,34 @@ class TestIBMCircle:
         assert self.ibm.mask_v[i_v, j_v]
         assert np.isclose(v[i_v, j_v], omega * (self.g.xc[i_v] - cx))
 
+    def test_force_diagnostic_uses_local_face_measures_on_nonuniform_grid(self):
+        xf = np.array([0.0, 0.2, 0.6, 1.0], dtype=float)
+        yf = np.array([0.0, 0.1, 0.4, 1.0], dtype=float)
+        g = CartesianGrid(3, 3, lx=1.0, ly=1.0, xf=xf, yf=yf)
+        ibm = ImmersedBoundary(g)
+
+        mask_u = np.zeros(g.u_shape, dtype=bool)
+        mask_v = np.zeros(g.v_shape, dtype=bool)
+        mask_u[1, 0] = True
+        mask_u[2, 2] = True
+        mask_v[0, 1] = True
+        mask_v[2, 2] = True
+        ibm.add_mask(mask_u, mask_v)
+
+        u = np.zeros(g.u_shape)
+        v = np.zeros(g.v_shape)
+        u[1, 0] = 2.0
+        u[2, 2] = 3.0
+        v[0, 1] = 5.0
+        v[2, 2] = 7.0
+
+        force_x, force_y = ibm.apply(u, v, dt=0.5, rho=1.0, time=0.0)
+
+        expected_fx = (2.0 * g.dy_cells[0] + 3.0 * g.dy_cells[2]) / 0.5
+        expected_fy = (5.0 * g.dx_cells[0] + 7.0 * g.dx_cells[2]) / 0.5
+        assert np.isclose(force_x, expected_fx)
+        assert np.isclose(force_y, expected_fy)
+
 
 class TestIBMRectangle:
     def test_add_rectangle(self):
@@ -99,6 +127,14 @@ class TestIBMRectangle:
         i_c = int(np.argmin(np.abs(g.xf - 0.5)))
         j_c = int(np.argmin(np.abs(g.yc - 0.5)))
         assert ibm.mask_u[i_c, j_c]
+
+    def test_add_mask_rejects_wrong_shape(self):
+        g = CartesianGrid(8, 6, lx=1.0, ly=1.0)
+        ibm = ImmersedBoundary(g)
+        with pytest.raises(ValueError):
+            ibm.add_mask(np.zeros((1, 1), dtype=bool), np.zeros(g.v_shape, dtype=bool))
+        with pytest.raises(ValueError):
+            ibm.add_mask(np.zeros(g.u_shape, dtype=bool), np.zeros((1, 1), dtype=bool))
 
 
 class TestIBMIndentedCircle:
@@ -186,4 +222,30 @@ class TestIBMSweepingJet:
         j_body = int(np.argmin(np.abs(g.yc - 1.0)))
         assert not ibm.mask_u[i_c, j_cavity]
         assert ibm.mask_u[i_c, j_body]
+        assert len(ibm.oscillating_jet_patches) == 1
+
+    def test_geometry_resolved_jet_rear_cavity_rotates_with_angle(self):
+        g = CartesianGrid(100, 100, lx=2.0, ly=2.0)
+        ibm = ImmersedBoundary(g)
+        ibm.add_geometry_resolved_sweeping_jet_circle(
+            cx=1.0,
+            cy=1.0,
+            radius=0.5,
+            jet_speed=0.4,
+            cavity_width=0.4,
+            cavity_height=0.3,
+            slot_width=0.12,
+            slot_height=0.08,
+            feed_width=0.18,
+            feed_height=0.08,
+            slot_center_angle_deg=180.0,
+            sweep_amplitude_deg=0.0,
+            frequency=0.0,
+        )
+
+        i_cavity = int(np.argmin(np.abs(g.xf - 0.72)))
+        j_cavity = int(np.argmin(np.abs(g.yc - 1.0)))
+        i_body = int(np.argmin(np.abs(g.xf - 1.0)))
+        assert not ibm.mask_u[i_cavity, j_cavity]
+        assert ibm.mask_u[i_body, j_cavity]
         assert len(ibm.oscillating_jet_patches) == 1

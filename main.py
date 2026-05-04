@@ -587,6 +587,35 @@ def _resolve_experiment_overrides(args) -> tuple[str, str]:
 
 
 def _plot_ibm_outline(ax, args, color: str = "white", linewidth: float = 1.6) -> None:
+    def local_box_points(
+        center_x: float,
+        center_y: float,
+        tangent_x: float,
+        tangent_y: float,
+        normal_x: float,
+        normal_y: float,
+        s0: float,
+        s1: float,
+        n0: float,
+        n1: float,
+    ) -> tuple[list[float], list[float]]:
+        corners = [
+            (s0, n0),
+            (s1, n0),
+            (s1, n1),
+            (s0, n1),
+            (s0, n0),
+        ]
+        x_pts = [
+            center_x + s * tangent_x + n * normal_x
+            for s, n in corners
+        ]
+        y_pts = [
+            center_y + s * tangent_y + n * normal_y
+            for s, n in corners
+        ]
+        return x_pts, y_pts
+
     cx, cy, radius = _resolve_cylinder_geometry(args)
     shape, actuation_mode = _resolve_experiment_overrides(args)
     theta = np.linspace(0.0, 2.0 * np.pi, 361)
@@ -596,24 +625,39 @@ def _plot_ibm_outline(ax, args, color: str = "white", linewidth: float = 1.6) ->
         ax.plot(x, y, color=color, linewidth=linewidth, zorder=6)
         if actuation_mode == "geometry-resolved-sweeping-jet":
             jet_cfg = _resolve_geometry_resolved_jet_geometry(args, radius, 1.0)
-            cavity_x0 = cx - 0.5 * jet_cfg["cavity_width"]
-            cavity_x1 = cx + 0.5 * jet_cfg["cavity_width"]
-            cavity_y1 = cy + radius - jet_cfg["slot_height"]
-            cavity_y0 = cavity_y1 - jet_cfg["cavity_height"]
-            slot_x0 = cx - 0.5 * jet_cfg["slot_width"]
-            slot_x1 = cx + 0.5 * jet_cfg["slot_width"]
-            slot_y0 = cy + radius - jet_cfg["slot_height"]
-            slot_y1 = cy + radius
+            slot_center_angle = np.deg2rad(jet_cfg["center_deg"])
+            normal_x = float(np.cos(slot_center_angle))
+            normal_y = float(np.sin(slot_center_angle))
+            tangent_x = float(-np.sin(slot_center_angle))
+            tangent_y = float(np.cos(slot_center_angle))
+            cavity_x, cavity_y = local_box_points(
+                cx, cy,
+                tangent_x, tangent_y,
+                normal_x, normal_y,
+                -0.5 * jet_cfg["cavity_width"],
+                0.5 * jet_cfg["cavity_width"],
+                radius - jet_cfg["slot_height"] - jet_cfg["cavity_height"],
+                radius - jet_cfg["slot_height"],
+            )
+            slot_x, slot_y = local_box_points(
+                cx, cy,
+                tangent_x, tangent_y,
+                normal_x, normal_y,
+                -0.5 * jet_cfg["slot_width"],
+                0.5 * jet_cfg["slot_width"],
+                radius - jet_cfg["slot_height"],
+                radius,
+            )
             ax.plot(
-                [cavity_x0, cavity_x1, cavity_x1, cavity_x0, cavity_x0],
-                [cavity_y0, cavity_y0, cavity_y1, cavity_y1, cavity_y0],
+                cavity_x,
+                cavity_y,
                 color=color,
                 linewidth=linewidth * 0.9,
                 zorder=6,
             )
             ax.plot(
-                [slot_x0, slot_x1, slot_x1, slot_x0, slot_x0],
-                [slot_y0, slot_y0, slot_y1, slot_y1, slot_y0],
+                slot_x,
+                slot_y,
                 color=color,
                 linewidth=linewidth * 0.9,
                 zorder=6,
@@ -953,6 +997,7 @@ def run(args, grid=None, grid_loaded_from_file=False):
                 slot_height=jet_cfg["slot_height"],
                 feed_width=jet_cfg["feed_width"],
                 feed_height=jet_cfg["feed_height"],
+                slot_center_angle_deg=jet_cfg["center_deg"],
                 sweep_amplitude_deg=jet_cfg["angle_deg"],
                 frequency=jet_cfg["frequency"],
                 phase=jet_cfg["phase_rad"],

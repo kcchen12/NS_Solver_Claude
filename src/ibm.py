@@ -53,6 +53,8 @@ class RotatingCircleSpec:
     phase: float
     mask_u: np.ndarray
     mask_v: np.ndarray
+    u_y_offset: np.ndarray
+    v_x_offset: np.ndarray
 
     def angular_velocity(self, time: float) -> float:
         return float(
@@ -74,6 +76,10 @@ class SweepingJetSpec:
     phase: float
     mask_u: np.ndarray
     mask_v: np.ndarray
+    u_normal_x: np.ndarray
+    u_tangent_x: np.ndarray
+    v_normal_y: np.ndarray
+    v_tangent_y: np.ndarray
 
     def sweep_angle(self, time: float) -> float:
         return float(
@@ -112,6 +118,16 @@ class ImmersedBoundary:
         # Binary masks: 1 = solid, 0 = fluid
         self.mask_u = np.zeros(grid.u_shape, dtype=bool)
         self.mask_v = np.zeros(grid.v_shape, dtype=bool)
+        self._u_x = np.broadcast_to(grid.xf[:, np.newaxis], grid.u_shape)
+        self._u_y = np.broadcast_to(grid.yc[np.newaxis, :], grid.u_shape)
+        self._v_x = np.broadcast_to(grid.xc[:, np.newaxis], grid.v_shape)
+        self._v_y = np.broadcast_to(grid.yf[np.newaxis, :], grid.v_shape)
+        self._u_face_measure = np.broadcast_to(
+            grid.dy_cells[np.newaxis, :], grid.u_shape
+        )
+        self._v_face_measure = np.broadcast_to(
+            grid.dx_cells[:, np.newaxis], grid.v_shape
+        )
         self.rotating_circles: list[RotatingCircleSpec] = []
         self.sweeping_jets: list[SweepingJetSpec] = []
         self.oscillating_jet_patches: list[OscillatingJetPatchSpec] = []
@@ -233,6 +249,33 @@ class ImmersedBoundary:
         )
         return mask_u, mask_v
 
+    def _local_rectangle_masks(
+        self,
+        cx: float,
+        cy: float,
+        tangent_x: float,
+        tangent_y: float,
+        normal_x: float,
+        normal_y: float,
+        s0: float,
+        s1: float,
+        n0: float,
+        n1: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        u_dx = self._u_x - float(cx)
+        u_dy = self._u_y - float(cy)
+        v_dx = self._v_x - float(cx)
+        v_dy = self._v_y - float(cy)
+
+        u_s = u_dx * tangent_x + u_dy * tangent_y
+        u_n = u_dx * normal_x + u_dy * normal_y
+        v_s = v_dx * tangent_x + v_dy * tangent_y
+        v_n = v_dx * normal_x + v_dy * normal_y
+
+        mask_u = (u_s >= s0) & (u_s <= s1) & (u_n >= n0) & (u_n <= n1)
+        mask_v = (v_s >= s0) & (v_s <= s1) & (v_n >= n0) & (v_n <= n1)
+        return mask_u, mask_v
+
     # ------------------------------------------------------------------
     # Geometry builders
     # ------------------------------------------------------------------
@@ -252,14 +295,8 @@ class ImmersedBoundary:
             Prescribed velocity on the body surface (0 for stationary wall).
         """
         del u_body, v_body
-        grid = self.grid
-        xf = grid.xf[:, np.newaxis]
-        yc = grid.yc[np.newaxis, :]
-        self.mask_u |= self._circle_mask(xf, yc, cx, cy, radius)
-
-        xc = grid.xc[:, np.newaxis]
-        yf = grid.yf[np.newaxis, :]
-        self.mask_v |= self._circle_mask(xc, yf, cx, cy, radius)
+        self.mask_u |= self._circle_mask(self._u_x, self._u_y, cx, cy, radius)
+        self.mask_v |= self._circle_mask(self._v_x, self._v_y, cx, cy, radius)
 
     def add_circle_with_top_indent(
         self,
@@ -317,15 +354,8 @@ class ImmersedBoundary:
             u = -omega(t) * (y - cy)
             v =  omega(t) * (x - cx)
         """
-        grid = self.grid
-
-        xf = grid.xf[:, np.newaxis]
-        yc = grid.yc[np.newaxis, :]
-        mask_u = self._circle_mask(xf, yc, cx, cy, radius)
-
-        xc = grid.xc[:, np.newaxis]
-        yf = grid.yf[np.newaxis, :]
-        mask_v = self._circle_mask(xc, yf, cx, cy, radius)
+        mask_u = self._circle_mask(self._u_x, self._u_y, cx, cy, radius)
+        mask_v = self._circle_mask(self._v_x, self._v_y, cx, cy, radius)
 
         self.mask_u |= mask_u
         self.mask_v |= mask_v
@@ -339,6 +369,8 @@ class ImmersedBoundary:
                 phase=float(phase),
                 mask_u=mask_u,
                 mask_v=mask_v,
+                u_y_offset=self._u_y[mask_u] - float(cy),
+                v_x_offset=self._v_x[mask_v] - float(cx),
             )
         )
 
@@ -414,6 +446,18 @@ class ImmersedBoundary:
             slot_width_angle=slot_width_angle,
             slot_depth=float(slot_depth),
         )
+        ru = np.sqrt((self._u_x - cx) ** 2 + (self._u_y - cy) ** 2)
+        rv = np.sqrt((self._v_x - cx) ** 2 + (self._v_y - cy) ** 2)
+        ru = np.where(ru > 1e-14, ru, 1.0)
+        rv = np.where(rv > 1e-14, rv, 1.0)
+
+        nu_x = (self._u_x - cx) / ru
+        nu_y = (self._u_y - cy) / ru
+        nv_x = (self._v_x - cx) / rv
+        nv_y = (self._v_y - cy) / rv
+
+        tu_x = -nu_y
+        tv_y = nv_x
 
         self.add_circle(cx, cy, radius)
         self.sweeping_jets.append(
@@ -430,6 +474,10 @@ class ImmersedBoundary:
                 phase=float(phase),
                 mask_u=mask_u,
                 mask_v=mask_v,
+                u_normal_x=nu_x[mask_u],
+                u_tangent_x=tu_x[mask_u],
+                v_normal_y=nv_y[mask_v],
+                v_tangent_y=tv_y[mask_v],
             )
         )
 
@@ -445,12 +493,13 @@ class ImmersedBoundary:
         slot_height: float,
         feed_width: float,
         feed_height: float,
+        slot_center_angle_deg: float = 90.0,
         sweep_amplitude_deg: float = 25.0,
         frequency: float = 0.0,
         phase: float = 0.0,
     ) -> None:
         """
-        Add a circle with an internal rectangular plenum and a narrow top slot.
+        Add a circle with an internal rectangular plenum and a narrow surface slot.
 
         The cylinder remains an IBM body, but the cavity/slot are carved back
         into the fluid domain. A forcing patch inside the plenum drives the jet.
@@ -476,39 +525,62 @@ class ImmersedBoundary:
         if feed_width > cavity_width or feed_height > cavity_height:
             raise ValueError("feed patch must fit inside the cavity")
 
-        cavity_x0 = cx - 0.5 * cavity_width
-        cavity_x1 = cx + 0.5 * cavity_width
-        cavity_y1 = cy + radius - slot_height
-        cavity_y0 = cavity_y1 - cavity_height
+        slot_center_angle = np.deg2rad(float(slot_center_angle_deg))
+        normal_x = float(np.cos(slot_center_angle))
+        normal_y = float(np.sin(slot_center_angle))
+        tangent_x = float(-np.sin(slot_center_angle))
+        tangent_y = float(np.cos(slot_center_angle))
 
-        slot_x0 = cx - 0.5 * slot_width
-        slot_x1 = cx + 0.5 * slot_width
-        slot_y0 = cy + radius - slot_height
-        slot_y1 = cy + radius
+        cavity_s0 = -0.5 * cavity_width
+        cavity_s1 = 0.5 * cavity_width
+        cavity_n1 = radius - slot_height
+        cavity_n0 = cavity_n1 - cavity_height
 
-        feed_x0 = cx - 0.5 * feed_width
-        feed_x1 = cx + 0.5 * feed_width
-        feed_y0 = cavity_y0
-        feed_y1 = cavity_y0 + feed_height
+        slot_s0 = -0.5 * slot_width
+        slot_s1 = 0.5 * slot_width
+        slot_n0 = radius - slot_height
+        slot_n1 = radius
 
-        circle_u = self._circle_mask(
-            self.grid.xf[:, np.newaxis], self.grid.yc[np.newaxis, :], cx, cy, radius
+        feed_s0 = -0.5 * feed_width
+        feed_s1 = 0.5 * feed_width
+        # Keep the forcing patch centered inside the plenum so the resolved
+        # jet remains visually and numerically aligned with the cylinder axis.
+        cavity_nc = 0.5 * (cavity_n0 + cavity_n1)
+        feed_n0 = cavity_nc - 0.5 * feed_height
+        feed_n1 = cavity_nc + 0.5 * feed_height
+
+        circle_u = self._circle_mask(self._u_x, self._u_y, cx, cy, radius)
+        circle_v = self._circle_mask(self._v_x, self._v_y, cx, cy, radius)
+        cavity_u, cavity_v = self._local_rectangle_masks(
+            cx, cy,
+            tangent_x, tangent_y,
+            normal_x, normal_y,
+            cavity_s0, cavity_s1,
+            cavity_n0, cavity_n1,
         )
-        circle_v = self._circle_mask(
-            self.grid.xc[:, np.newaxis], self.grid.yf[np.newaxis, :], cx, cy, radius
+        slot_u, slot_v = self._local_rectangle_masks(
+            cx, cy,
+            tangent_x, tangent_y,
+            normal_x, normal_y,
+            slot_s0, slot_s1,
+            slot_n0, slot_n1,
         )
-        cavity_u, cavity_v = self._rectangle_masks(cavity_x0, cavity_x1, cavity_y0, cavity_y1)
-        slot_u, slot_v = self._rectangle_masks(slot_x0, slot_x1, slot_y0, slot_y1)
 
         solid_u = circle_u & ~(cavity_u | slot_u)
         solid_v = circle_v & ~(cavity_v | slot_v)
         self.add_mask(solid_u, solid_v)
 
-        feed_u, feed_v = self._rectangle_masks(feed_x0, feed_x1, feed_y0, feed_y1)
+        feed_u, feed_v = self._local_rectangle_masks(
+            cx, cy,
+            tangent_x, tangent_y,
+            normal_x, normal_y,
+            feed_s0, feed_s1,
+            feed_n0, feed_n1,
+        )
         self.oscillating_jet_patches.append(
             OscillatingJetPatchSpec(
                 jet_speed=float(jet_speed),
-                base_angle=0.5 * np.pi,
+                base_angle=slot_center_angle,
                 sweep_amplitude=np.deg2rad(float(sweep_amplitude_deg)),
                 frequency=float(frequency),
                 phase=float(phase),
@@ -542,8 +614,14 @@ class ImmersedBoundary:
         """
         Directly supply boolean masks for u and v faces.
         """
-        assert mask_u.shape == self.grid.u_shape
-        assert mask_v.shape == self.grid.v_shape
+        if mask_u.shape != self.grid.u_shape:
+            raise ValueError(
+                f"mask_u must have shape {self.grid.u_shape}, got {mask_u.shape}"
+            )
+        if mask_v.shape != self.grid.v_shape:
+            raise ValueError(
+                f"mask_v must have shape {self.grid.v_shape}, got {mask_v.shape}"
+            )
         self.mask_u |= mask_u
         self.mask_v |= mask_v
 
@@ -569,52 +647,33 @@ class ImmersedBoundary:
         forcing_v = None
         u_target = np.full_like(u, float(u_body))
         v_target = np.full_like(v, float(v_body))
-        enforce_u_mask = self.mask_u.copy()
-        enforce_v_mask = self.mask_v.copy()
+        enforce_u_mask = self.mask_u
+        enforce_v_mask = self.mask_v
 
         if self.rotating_circles:
-            u_y = np.broadcast_to(
-                self.grid.yc[np.newaxis, :], self.grid.u_shape)
-            v_x = np.broadcast_to(
-                self.grid.xc[:, np.newaxis], self.grid.v_shape)
             for spec in self.rotating_circles:
                 omega = spec.angular_velocity(time)
-                u_target[spec.mask_u] = -omega * (u_y[spec.mask_u] - spec.cy)
-                v_target[spec.mask_v] = omega * (v_x[spec.mask_v] - spec.cx)
+                u_target[spec.mask_u] = -omega * spec.u_y_offset
+                v_target[spec.mask_v] = omega * spec.v_x_offset
 
         if self.sweeping_jets:
-            u_x = np.broadcast_to(self.grid.xf[:, np.newaxis], self.grid.u_shape)
-            u_y = np.broadcast_to(self.grid.yc[np.newaxis, :], self.grid.u_shape)
-            v_x = np.broadcast_to(self.grid.xc[:, np.newaxis], self.grid.v_shape)
-            v_y = np.broadcast_to(self.grid.yf[np.newaxis, :], self.grid.v_shape)
+            enforce_u_mask = self.mask_u.copy()
+            enforce_v_mask = self.mask_v.copy()
             for spec in self.sweeping_jets:
                 alpha = spec.sweep_angle(time)
-
-                ru = np.sqrt((u_x - spec.cx) ** 2 + (u_y - spec.cy) ** 2)
-                rv = np.sqrt((v_x - spec.cx) ** 2 + (v_y - spec.cy) ** 2)
-                ru = np.where(ru > 1e-14, ru, 1.0)
-                rv = np.where(rv > 1e-14, rv, 1.0)
-
-                nu_x = (u_x - spec.cx) / ru
-                nu_y = (u_y - spec.cy) / ru
-                nv_x = (v_x - spec.cx) / rv
-                nv_y = (v_y - spec.cy) / rv
-
-                tu_x = -nu_y
-                tu_y = nu_x
-                tv_x = -nv_y
-                tv_y = nv_x
-
                 u_target[spec.mask_u] = spec.jet_speed * (
-                    np.cos(alpha) * nu_x[spec.mask_u] + np.sin(alpha) * tu_x[spec.mask_u]
+                    np.cos(alpha) * spec.u_normal_x + np.sin(alpha) * spec.u_tangent_x
                 )
                 v_target[spec.mask_v] = spec.jet_speed * (
-                    np.cos(alpha) * nv_y[spec.mask_v] + np.sin(alpha) * tv_y[spec.mask_v]
+                    np.cos(alpha) * spec.v_normal_y + np.sin(alpha) * spec.v_tangent_y
                 )
                 enforce_u_mask |= spec.mask_u
                 enforce_v_mask |= spec.mask_v
 
         if self.oscillating_jet_patches:
+            if enforce_u_mask is self.mask_u:
+                enforce_u_mask = self.mask_u.copy()
+                enforce_v_mask = self.mask_v.copy()
             for spec in self.oscillating_jet_patches:
                 angle = spec.direction_angle(time)
                 u_target[spec.mask_u] = spec.jet_speed * np.cos(angle)
@@ -623,11 +682,26 @@ class ImmersedBoundary:
                 enforce_v_mask |= spec.mask_v
 
         if dt is not None and dt > 0.0:
-            face_area = self.grid.mean_cell_area
-            force_x = rho * face_area * \
-                float(np.sum(u[enforce_u_mask] - u_target[enforce_u_mask])) / dt
-            force_y = rho * face_area * \
-                float(np.sum(v[enforce_v_mask] - v_target[enforce_v_mask])) / dt
+            force_x = (
+                rho
+                * float(
+                    np.sum(
+                        (u[enforce_u_mask] - u_target[enforce_u_mask])
+                        * self._u_face_measure[enforce_u_mask]
+                    )
+                )
+                / dt
+            )
+            force_y = (
+                rho
+                * float(
+                    np.sum(
+                        (v[enforce_v_mask] - v_target[enforce_v_mask])
+                        * self._v_face_measure[enforce_v_mask]
+                    )
+                )
+                / dt
+            )
             if return_face_forcing:
                 forcing_u = np.zeros_like(u)
                 forcing_v = np.zeros_like(v)
