@@ -339,6 +339,27 @@ def parse_args():
     p.add_argument("--resolved-jet-feed-height", type=float,
                    default=cfg.get("resolved_jet_feed_height", 0.0, float),
                    help="Height of the internal forcing/feed patch for geometry-resolved jet mode")
+    p.add_argument("--resolved-jet-nozzle-length", type=float,
+                   default=cfg.get("resolved_jet_nozzle_length", 0.0, float),
+                   help="Length of the tapered nozzle section between plenum and slot")
+    p.add_argument("--resolved-jet-slot-exit-width", type=float,
+                   default=cfg.get("resolved_jet_slot_exit_width", 0.0, float),
+                   help="Width of the internal exit wedge where the slot meets the cylinder wall")
+    p.add_argument("--resolved-jet-island-wall-gap", type=float,
+                   default=cfg.get("resolved_jet_island_wall_gap", 0.0, float),
+                   help="Gap between each floating island and the outer plenum wall")
+    p.add_argument("--resolved-jet-island-center-gap", type=float,
+                   default=cfg.get("resolved_jet_island_center_gap", 0.0, float),
+                   help="Gap between the two floating islands across the center channel")
+    p.add_argument("--resolved-jet-island-leading-gap", type=float,
+                   default=cfg.get("resolved_jet_island_leading_gap", 0.0, float),
+                   help="Gap from the back of the plenum to the start of each floating island")
+    p.add_argument("--resolved-jet-island-trailing-gap", type=float,
+                   default=cfg.get("resolved_jet_island_trailing_gap", 0.0, float),
+                   help="Gap from the front of each floating island to the nozzle throat")
+    p.add_argument("--resolved-jet-island-taper", type=float,
+                   default=cfg.get("resolved_jet_island_taper", 0.0, float),
+                   help="Taper amount applied to the front face of each floating island")
     p.add_argument("--re-is-cylinder-based", type=str_to_bool,
                    default=cfg.get("re_is_cylinder_based", True, bool),
                    help="Interpret --re as Re_D based on cylinder diameter when cylinder is enabled")
@@ -541,6 +562,13 @@ def _resolve_geometry_resolved_jet_geometry(args, radius: float, inflow_u: float
     slot_height = float(args.resolved_jet_slot_height)
     feed_width = float(args.resolved_jet_feed_width)
     feed_height = float(args.resolved_jet_feed_height)
+    nozzle_length = float(args.resolved_jet_nozzle_length)
+    slot_exit_width = float(args.resolved_jet_slot_exit_width)
+    island_wall_gap = float(args.resolved_jet_island_wall_gap)
+    island_center_gap = float(args.resolved_jet_island_center_gap)
+    island_leading_gap = float(args.resolved_jet_island_leading_gap)
+    island_trailing_gap = float(args.resolved_jet_island_trailing_gap)
+    island_taper = float(args.resolved_jet_island_taper)
 
     if cavity_width <= 0.0:
         cavity_width = 0.9 * radius
@@ -554,6 +582,29 @@ def _resolve_geometry_resolved_jet_geometry(args, radius: float, inflow_u: float
         feed_width = 0.45 * radius
     if feed_height <= 0.0:
         feed_height = 0.22 * radius
+    if nozzle_length <= 0.0:
+        nozzle_length = min(
+            max(1.5 * slot_height, 0.35 * cavity_height),
+            0.65 * cavity_height,
+        )
+    plenum_depth = max(cavity_height - nozzle_length, 1e-12)
+    if slot_exit_width <= 0.0:
+        slot_exit_width = min(cavity_width, slot_width + 2.0 * slot_height)
+    if island_wall_gap <= 0.0:
+        island_wall_gap = 0.12 * cavity_width
+    if island_center_gap <= 0.0:
+        island_center_gap = max(0.22 * cavity_width, feed_width + 0.08 * cavity_width)
+    if island_leading_gap <= 0.0:
+        island_leading_gap = 0.18 * plenum_depth
+    if island_trailing_gap <= 0.0:
+        island_trailing_gap = 0.18 * plenum_depth
+
+    island_height = 0.5 * max(
+        cavity_width - 2.0 * island_wall_gap - island_center_gap,
+        0.18 * cavity_width,
+    )
+    if island_taper <= 0.0:
+        island_taper = 0.18 * island_height
 
     jet_cfg.update({
         "cavity_width": cavity_width,
@@ -562,6 +613,13 @@ def _resolve_geometry_resolved_jet_geometry(args, radius: float, inflow_u: float
         "slot_height": slot_height,
         "feed_width": feed_width,
         "feed_height": feed_height,
+        "nozzle_length": nozzle_length,
+        "slot_exit_width": slot_exit_width,
+        "island_wall_gap": island_wall_gap,
+        "island_center_gap": island_center_gap,
+        "island_leading_gap": island_leading_gap,
+        "island_trailing_gap": island_trailing_gap,
+        "island_taper": island_taper,
     })
     return jet_cfg
 
@@ -616,6 +674,45 @@ def _plot_ibm_outline(ax, args, color: str = "white", linewidth: float = 1.6) ->
         ]
         return x_pts, y_pts
 
+    def local_poly_points(
+        center_x: float,
+        center_y: float,
+        tangent_x: float,
+        tangent_y: float,
+        normal_x: float,
+        normal_y: float,
+        corners: list[tuple[float, float]],
+    ) -> tuple[list[float], list[float]]:
+        x_pts = [
+            center_x + s * tangent_x + n * normal_x
+            for s, n in corners
+        ]
+        y_pts = [
+            center_y + s * tangent_y + n * normal_y
+            for s, n in corners
+        ]
+        return x_pts, y_pts
+
+    def local_curve_points(
+        center_x: float,
+        center_y: float,
+        tangent_x: float,
+        tangent_y: float,
+        normal_x: float,
+        normal_y: float,
+        s_vals: np.ndarray,
+        n_vals: np.ndarray,
+    ) -> tuple[list[float], list[float]]:
+        x_pts = [
+            center_x + s * tangent_x + n * normal_x
+            for s, n in zip(s_vals, n_vals)
+        ]
+        y_pts = [
+            center_y + s * tangent_y + n * normal_y
+            for s, n in zip(s_vals, n_vals)
+        ]
+        return x_pts, y_pts
+
     cx, cy, radius = _resolve_cylinder_geometry(args)
     shape, actuation_mode = _resolve_experiment_overrides(args)
     theta = np.linspace(0.0, 2.0 * np.pi, 361)
@@ -630,27 +727,124 @@ def _plot_ibm_outline(ax, args, color: str = "white", linewidth: float = 1.6) ->
             normal_y = float(np.sin(slot_center_angle))
             tangent_x = float(-np.sin(slot_center_angle))
             tangent_y = float(np.cos(slot_center_angle))
-            cavity_x, cavity_y = local_box_points(
+            nozzle_length = jet_cfg["nozzle_length"]
+            plenum_n1 = radius - jet_cfg["slot_height"] - nozzle_length
+            plenum_depth = plenum_n1 - (radius - jet_cfg["slot_height"] - jet_cfg["cavity_height"])
+            cavity_x, cavity_y = local_poly_points(
                 cx, cy,
                 tangent_x, tangent_y,
                 normal_x, normal_y,
-                -0.5 * jet_cfg["cavity_width"],
-                0.5 * jet_cfg["cavity_width"],
-                radius - jet_cfg["slot_height"] - jet_cfg["cavity_height"],
-                radius - jet_cfg["slot_height"],
+                [
+                    (-0.5 * jet_cfg["cavity_width"], radius - jet_cfg["slot_height"] - jet_cfg["cavity_height"]),
+                    (0.5 * jet_cfg["cavity_width"], radius - jet_cfg["slot_height"] - jet_cfg["cavity_height"]),
+                    (0.5 * jet_cfg["cavity_width"], plenum_n1),
+                    (0.5 * jet_cfg["slot_width"], radius - jet_cfg["slot_height"]),
+                    (-0.5 * jet_cfg["slot_width"], radius - jet_cfg["slot_height"]),
+                    (-0.5 * jet_cfg["cavity_width"], plenum_n1),
+                    (-0.5 * jet_cfg["cavity_width"], radius - jet_cfg["slot_height"] - jet_cfg["cavity_height"]),
+                ],
             )
-            slot_x, slot_y = local_box_points(
+            center_gap_s = jet_cfg["island_center_gap"]
+            island_height = 0.5 * max(
+                jet_cfg["cavity_width"] - 2.0 * jet_cfg["island_wall_gap"] - center_gap_s,
+                0.18 * jet_cfg["cavity_width"],
+            )
+            island_n0 = (
+                radius - jet_cfg["slot_height"] - jet_cfg["cavity_height"]
+                + jet_cfg["island_leading_gap"]
+            )
+            island_n1 = plenum_n1 - jet_cfg["island_trailing_gap"]
+            island_taper = jet_cfg["island_taper"] if jet_cfg["island_taper"] > 0.0 else 0.18 * island_height
+            upper_s0 = 0.5 * center_gap_s
+            upper_s1 = upper_s0 + island_height
+            lower_s1 = -0.5 * center_gap_s
+            lower_s0 = lower_s1 - island_height
+            upper_splitter_x, upper_splitter_y = local_poly_points(
                 cx, cy,
                 tangent_x, tangent_y,
                 normal_x, normal_y,
-                -0.5 * jet_cfg["slot_width"],
-                0.5 * jet_cfg["slot_width"],
-                radius - jet_cfg["slot_height"],
-                radius,
+                [
+                    (upper_s0, island_n0),
+                    (upper_s1, island_n0),
+                    (upper_s1 - island_taper, island_n1),
+                    (upper_s0 + island_taper, island_n1),
+                    (upper_s0, island_n0),
+                ],
+            )
+            lower_splitter_x, lower_splitter_y = local_poly_points(
+                cx, cy,
+                tangent_x, tangent_y,
+                normal_x, normal_y,
+                [
+                    (lower_s0, island_n0),
+                    (lower_s1, island_n0),
+                    (lower_s1 - island_taper, island_n1),
+                    (lower_s0 + island_taper, island_n1),
+                    (lower_s0, island_n0),
+                ],
+            )
+            slot_exit_width = jet_cfg["slot_exit_width"]
+            slot_n0 = radius - jet_cfg["slot_height"]
+            slot_half_width0 = 0.5 * jet_cfg["slot_width"]
+            slot_half_width1 = 0.5 * slot_exit_width
+
+            def slot_minus_circle(n_val: float) -> float:
+                alpha = (n_val - slot_n0) / max(jet_cfg["slot_height"], 1e-12)
+                half_width = (1.0 - alpha) * slot_half_width0 + alpha * slot_half_width1
+                return half_width - np.sqrt(max(radius ** 2 - n_val ** 2, 0.0))
+
+            n_lo = slot_n0
+            n_hi = radius
+            for _ in range(50):
+                n_mid = 0.5 * (n_lo + n_hi)
+                if slot_minus_circle(n_mid) > 0.0:
+                    n_hi = n_mid
+                else:
+                    n_lo = n_mid
+            n_int = 0.5 * (n_lo + n_hi)
+            s_int = np.sqrt(max(radius ** 2 - n_int ** 2, 0.0))
+
+            theta_arc = np.linspace(
+                np.arctan2(-s_int, n_int),
+                np.arctan2(s_int, n_int),
+                80,
+            )
+            arc_s = radius * np.sin(theta_arc)
+            arc_n = radius * np.cos(theta_arc)
+            slot_s = np.concatenate((
+                np.array([-slot_half_width0, slot_half_width0, s_int]),
+                arc_s[::-1],
+                np.array([-s_int, -slot_half_width0]),
+            ))
+            slot_n = np.concatenate((
+                np.array([slot_n0, slot_n0, n_int]),
+                arc_n[::-1],
+                np.array([n_int, slot_n0]),
+            ))
+            slot_x, slot_y = local_curve_points(
+                cx, cy,
+                tangent_x, tangent_y,
+                normal_x, normal_y,
+                slot_s,
+                slot_n,
             )
             ax.plot(
                 cavity_x,
                 cavity_y,
+                color=color,
+                linewidth=linewidth * 0.9,
+                zorder=6,
+            )
+            ax.plot(
+                upper_splitter_x,
+                upper_splitter_y,
+                color=color,
+                linewidth=linewidth * 0.9,
+                zorder=6,
+            )
+            ax.plot(
+                lower_splitter_x,
+                lower_splitter_y,
                 color=color,
                 linewidth=linewidth * 0.9,
                 zorder=6,
@@ -997,6 +1191,13 @@ def run(args, grid=None, grid_loaded_from_file=False):
                 slot_height=jet_cfg["slot_height"],
                 feed_width=jet_cfg["feed_width"],
                 feed_height=jet_cfg["feed_height"],
+                nozzle_length=jet_cfg["nozzle_length"],
+                slot_exit_width=jet_cfg["slot_exit_width"],
+                island_wall_gap=jet_cfg["island_wall_gap"],
+                island_center_gap=jet_cfg["island_center_gap"],
+                island_leading_gap=jet_cfg["island_leading_gap"],
+                island_trailing_gap=jet_cfg["island_trailing_gap"],
+                island_taper=jet_cfg["island_taper"],
                 slot_center_angle_deg=jet_cfg["center_deg"],
                 sweep_amplitude_deg=jet_cfg["angle_deg"],
                 frequency=jet_cfg["frequency"],

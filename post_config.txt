@@ -6,7 +6,7 @@ plot = true
 plot_grid = true
 auto_generate_grid_spacing = true
 auto_generate_ibm_forcing = true
-auto_generate_vorticity_video = true
+auto_generate_vorticity_video = off
 auto_vorticity_video_frame_stride = 5
 
 # Aerodynamic outputs

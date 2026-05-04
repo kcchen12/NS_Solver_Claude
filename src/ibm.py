@@ -276,6 +276,120 @@ class ImmersedBoundary:
         mask_v = (v_s >= s0) & (v_s <= s1) & (v_n >= n0) & (v_n <= n1)
         return mask_u, mask_v
 
+    def _local_tapered_channel_masks(
+        self,
+        cx: float,
+        cy: float,
+        tangent_x: float,
+        tangent_y: float,
+        normal_x: float,
+        normal_y: float,
+        n0: float,
+        n1: float,
+        width0: float,
+        width1: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if n1 <= n0:
+            raise ValueError("tapered channel requires n1 > n0")
+
+        u_dx = self._u_x - float(cx)
+        u_dy = self._u_y - float(cy)
+        v_dx = self._v_x - float(cx)
+        v_dy = self._v_y - float(cy)
+
+        u_s = u_dx * tangent_x + u_dy * tangent_y
+        u_n = u_dx * normal_x + u_dy * normal_y
+        v_s = v_dx * tangent_x + v_dy * tangent_y
+        v_n = v_dx * normal_x + v_dy * normal_y
+
+        u_alpha = np.clip((u_n - n0) / (n1 - n0), 0.0, 1.0)
+        v_alpha = np.clip((v_n - n0) / (n1 - n0), 0.0, 1.0)
+        u_half_width = 0.5 * ((1.0 - u_alpha) * width0 + u_alpha * width1)
+        v_half_width = 0.5 * ((1.0 - v_alpha) * width0 + v_alpha * width1)
+
+        mask_u = (
+            (u_n >= n0)
+            & (u_n <= n1)
+            & (np.abs(u_s) <= u_half_width)
+        )
+        mask_v = (
+            (v_n >= n0)
+            & (v_n <= n1)
+            & (np.abs(v_s) <= v_half_width)
+        )
+        return mask_u, mask_v
+
+    def _local_triangle_masks(
+        self,
+        cx: float,
+        cy: float,
+        tangent_x: float,
+        tangent_y: float,
+        normal_x: float,
+        normal_y: float,
+        p0: tuple[float, float],
+        p1: tuple[float, float],
+        p2: tuple[float, float],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        def point_mask(s_vals: np.ndarray, n_vals: np.ndarray) -> np.ndarray:
+            x0, y0 = p0
+            x1, y1 = p1
+            x2, y2 = p2
+            denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+            if abs(denom) <= 1e-14:
+                return np.zeros_like(s_vals, dtype=bool)
+            a = ((y1 - y2) * (s_vals - x2) + (x2 - x1) * (n_vals - y2)) / denom
+            b = ((y2 - y0) * (s_vals - x2) + (x0 - x2) * (n_vals - y2)) / denom
+            c = 1.0 - a - b
+            tol = 1e-12
+            return (a >= -tol) & (b >= -tol) & (c >= -tol)
+
+        u_dx = self._u_x - float(cx)
+        u_dy = self._u_y - float(cy)
+        v_dx = self._v_x - float(cx)
+        v_dy = self._v_y - float(cy)
+        u_s = u_dx * tangent_x + u_dy * tangent_y
+        u_n = u_dx * normal_x + u_dy * normal_y
+        v_s = v_dx * tangent_x + v_dy * tangent_y
+        v_n = v_dx * normal_x + v_dy * normal_y
+        return point_mask(u_s, u_n), point_mask(v_s, v_n)
+
+    def _local_convex_polygon_masks(
+        self,
+        cx: float,
+        cy: float,
+        tangent_x: float,
+        tangent_y: float,
+        normal_x: float,
+        normal_y: float,
+        corners: list[tuple[float, float]],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if len(corners) < 3:
+            raise ValueError("polygon requires at least three corners")
+
+        def point_mask(s_vals: np.ndarray, n_vals: np.ndarray) -> np.ndarray:
+            mask = np.ones_like(s_vals, dtype=bool)
+            tol = 1e-12
+            for idx, (s0, n0) in enumerate(corners):
+                s1, n1 = corners[(idx + 1) % len(corners)]
+                edge_s = s1 - s0
+                edge_n = n1 - n0
+                rel_s = s_vals - s0
+                rel_n = n_vals - n0
+                cross = edge_s * rel_n - edge_n * rel_s
+                mask &= cross >= -tol
+            return mask
+
+        u_dx = self._u_x - float(cx)
+        u_dy = self._u_y - float(cy)
+        v_dx = self._v_x - float(cx)
+        v_dy = self._v_y - float(cy)
+        u_s = u_dx * tangent_x + u_dy * tangent_y
+        u_n = u_dx * normal_x + u_dy * normal_y
+        v_s = v_dx * tangent_x + v_dy * tangent_y
+        v_n = v_dx * normal_x + v_dy * normal_y
+        return point_mask(u_s, u_n), point_mask(v_s, v_n)
+
     # ------------------------------------------------------------------
     # Geometry builders
     # ------------------------------------------------------------------
@@ -493,6 +607,13 @@ class ImmersedBoundary:
         slot_height: float,
         feed_width: float,
         feed_height: float,
+        nozzle_length: float = 0.0,
+        slot_exit_width: float = 0.0,
+        island_wall_gap: float = 0.0,
+        island_center_gap: float = 0.0,
+        island_leading_gap: float = 0.0,
+        island_trailing_gap: float = 0.0,
+        island_taper: float = 0.0,
         slot_center_angle_deg: float = 90.0,
         sweep_amplitude_deg: float = 25.0,
         frequency: float = 0.0,
@@ -531,15 +652,57 @@ class ImmersedBoundary:
         tangent_x = float(-np.sin(slot_center_angle))
         tangent_y = float(np.cos(slot_center_angle))
 
-        cavity_s0 = -0.5 * cavity_width
-        cavity_s1 = 0.5 * cavity_width
         cavity_n1 = radius - slot_height
         cavity_n0 = cavity_n1 - cavity_height
+        if nozzle_length <= 0.0:
+            nozzle_length = min(
+                max(1.5 * slot_height, 0.35 * cavity_height),
+                0.65 * cavity_height,
+            )
+        plenum_n1 = cavity_n1 - nozzle_length
 
         slot_s0 = -0.5 * slot_width
         slot_s1 = 0.5 * slot_width
         slot_n0 = radius - slot_height
         slot_n1 = radius
+        if slot_exit_width <= 0.0:
+            slot_exit_width = min(cavity_width, slot_width + 2.0 * slot_height)
+
+        plenum_depth = max(plenum_n1 - cavity_n0, 1e-12)
+        if island_wall_gap <= 0.0:
+            island_wall_gap = 0.12 * cavity_width
+        if island_center_gap <= 0.0:
+            island_center_gap = max(0.22 * cavity_width, feed_width + 0.08 * cavity_width)
+        island_height = 0.5 * max(
+            cavity_width - 2.0 * island_wall_gap - island_center_gap,
+            0.18 * cavity_width,
+        )
+        if island_leading_gap <= 0.0:
+            island_leading_gap = 0.18 * plenum_depth
+        if island_trailing_gap <= 0.0:
+            island_trailing_gap = 0.18 * plenum_depth
+        island_n0 = cavity_n0 + island_leading_gap
+        island_n1 = plenum_n1 - island_trailing_gap
+        if island_taper <= 0.0:
+            island_taper = 0.18 * island_height
+
+        upper_s0 = 0.5 * island_center_gap
+        upper_s1 = upper_s0 + island_height
+        lower_s1 = -0.5 * island_center_gap
+        lower_s0 = lower_s1 - island_height
+
+        upper_island = [
+            (upper_s0, island_n0),
+            (upper_s1, island_n0),
+            (upper_s1 - island_taper, island_n1),
+            (upper_s0 + island_taper, island_n1),
+        ]
+        lower_island = [
+            (lower_s0, island_n0),
+            (lower_s1, island_n0),
+            (lower_s1 - island_taper, island_n1),
+            (lower_s0 + island_taper, island_n1),
+        ]
 
         feed_s0 = -0.5 * feed_width
         feed_s1 = 0.5 * feed_width
@@ -551,21 +714,46 @@ class ImmersedBoundary:
 
         circle_u = self._circle_mask(self._u_x, self._u_y, cx, cy, radius)
         circle_v = self._circle_mask(self._v_x, self._v_y, cx, cy, radius)
-        cavity_u, cavity_v = self._local_rectangle_masks(
+        plenum_u, plenum_v = self._local_rectangle_masks(
             cx, cy,
             tangent_x, tangent_y,
             normal_x, normal_y,
-            cavity_s0, cavity_s1,
-            cavity_n0, cavity_n1,
+            -0.5 * cavity_width, 0.5 * cavity_width,
+            cavity_n0, plenum_n1,
         )
-        slot_u, slot_v = self._local_rectangle_masks(
+        nozzle_u, nozzle_v = self._local_tapered_channel_masks(
             cx, cy,
             tangent_x, tangent_y,
             normal_x, normal_y,
-            slot_s0, slot_s1,
+            plenum_n1, cavity_n1,
+            cavity_width, slot_width,
+        )
+        slot_u, slot_v = self._local_tapered_channel_masks(
+            cx, cy,
+            tangent_x, tangent_y,
+            normal_x, normal_y,
             slot_n0, slot_n1,
+            slot_width, slot_exit_width,
         )
 
+        cavity_u = plenum_u | nozzle_u
+        cavity_v = plenum_v | nozzle_v
+        upper_u, upper_v = self._local_convex_polygon_masks(
+            cx, cy,
+            tangent_x, tangent_y,
+            normal_x, normal_y,
+            upper_island,
+        )
+        lower_u, lower_v = self._local_convex_polygon_masks(
+            cx, cy,
+            tangent_x, tangent_y,
+            normal_x, normal_y,
+            lower_island,
+        )
+        splitter_u = upper_u | lower_u
+        splitter_v = upper_v | lower_v
+        cavity_u &= ~splitter_u
+        cavity_v &= ~splitter_v
         solid_u = circle_u & ~(cavity_u | slot_u)
         solid_v = circle_v & ~(cavity_v | slot_v)
         self.add_mask(solid_u, solid_v)
